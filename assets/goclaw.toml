@@ -1,3 +1,7 @@
+[ui]
+user_label = "you"
+assistant_label = "goclaw"
+
 [[allow.tool]]
 name = "echo"
 description = "Print text to stdout. Use for simple output checks and formatting."

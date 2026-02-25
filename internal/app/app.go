@@ -117,7 +117,12 @@ func (a *App) RunSender(ctx context.Context) error {
 		return trace.BadParameter("term UI unavailable: %s", info.Reason)
 	}
 
-	tui := termui.New(a.cfg.MainConversationID)
+	tui := termui.New(
+		a.cfg.MainConversationID,
+		a.cfg.UIUserLabel,
+		a.cfg.UIAssistantLabel,
+		a.debugSnapshotProvider(),
+	)
 
 	senderCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -141,7 +146,79 @@ func (a *App) RunSender(ctx context.Context) error {
 	return trace.Wrap(err, "term UI exited")
 }
 
+func (a *App) debugSnapshotProvider() func(context.Context, string) (*termui.DebugSnapshot, error) {
+	type diagnosticsReader interface {
+		GetTaskDiagnostics(ctx context.Context, conversationID string, limit int) (store.TaskDiagnostics, error)
+	}
+	ds, ok := a.store.(diagnosticsReader)
+	if !ok {
+		return nil
+	}
+	return func(ctx context.Context, activeConversation string) (*termui.DebugSnapshot, error) {
+		diag, err := ds.GetTaskDiagnostics(ctx, activeConversation, 5)
+		if err != nil {
+			return nil, trace.Wrap(err)
+		}
+		return toDebugSnapshot(diag), nil
+	}
+}
+
+func toDebugSnapshot(diag store.TaskDiagnostics) *termui.DebugSnapshot {
+	out := &termui.DebugSnapshot{
+		GeneratedAt:        diag.GeneratedAt,
+		ScopeConversation:  diag.ConversationID,
+		Workers:            append([]string(nil), diag.WorkerIDs...),
+		Schedulers:         append([]string(nil), diag.SchedulerIDs...),
+		TasksTotal:         diag.TasksTotal,
+		TasksDue:           diag.TasksActiveDue,
+		TasksClaimable:     diag.TasksClaimable,
+		TasksLeased:        diag.TasksLeased,
+		TaskRunsQueued:     diag.TaskRunsQueued,
+		TaskRunsRunning:    diag.TaskRunsRunning,
+		InboundPending:     diag.InboundQueue.Pending,
+		InboundProcessing:  diag.InboundQueue.Processing,
+		InboundError:       diag.InboundQueue.Error,
+		OutboundPending:    diag.OutboundQueue.Pending,
+		OutboundProcessing: diag.OutboundQueue.Processing,
+		OutboundError:      diag.OutboundQueue.Error,
+	}
+	out.RecentTasks = make([]termui.DebugTaskRow, 0, len(diag.TaskSnapshotRows))
+	for _, row := range diag.TaskSnapshotRows {
+		out.RecentTasks = append(out.RecentTasks, termui.DebugTaskRow{
+			ID:               row.ID,
+			ConversationID:   row.ConversationID,
+			Status:           string(row.Status),
+			NextRunAt:        row.NextRunAt,
+			LastRunStatus:    row.LastRunStatus,
+			LastRunStartedAt: row.LastRunStartedAt,
+			FailureCount:     row.FailureCount,
+		})
+	}
+	return out
+}
+
 func (a *App) RunWorker(ctx context.Context) error {
+	_, _ = os.Stdout.WriteString("worker started: " + a.cfg.WorkerID + "\n")
+
+	a.logger.Info(
+		"worker start",
+		"conversation_id", "",
+		"message_id", "",
+		"stage", "ingress",
+		"worker_id", a.cfg.WorkerID,
+	)
+
+	if strings.TrimSpace(a.cfg.WorkerID) == "worker-1" {
+		a.logger.Warn(
+			"common WORKER_ID in use",
+			"conversation_id", "",
+			"message_id", "",
+			"stage", "ingress",
+			"worker_id", a.cfg.WorkerID,
+			"hint", "set unique WORKER_ID (or pass --worker-id) per worker process to avoid merged worker visibility",
+		)
+	}
+
 	a.runModelStartupDiagnostics(ctx)
 
 	ticker := time.NewTicker(a.cfg.QueuePollInterval)

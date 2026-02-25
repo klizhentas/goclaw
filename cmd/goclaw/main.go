@@ -34,11 +34,14 @@ type CLI struct {
 }
 
 type RunCmd struct {
-	Mode string `name:"mode" required:"" help:"Comma-separated modes: term,worker,scheduler,single."`
+	Mode     string `name:"mode" required:"" help:"Comma-separated modes: term,worker,scheduler,single."`
+	WorkerID string `name:"worker-id" help:"Worker identity override (used when mode includes worker). If omitted, worker ID is auto-generated at startup."`
 }
 
 type TermCmd struct{}
-type WorkerCmd struct{}
+type WorkerCmd struct {
+	WorkerID string `name:"worker-id" help:"Worker identity override. If omitted, worker ID is auto-generated at startup."`
+}
 type SchedulerCmd struct{}
 type SingleCmd struct{}
 
@@ -108,6 +111,10 @@ func main() {
 		slog.Error("load config", "error", err)
 		os.Exit(1)
 	}
+	applyCLIWorkerIDOverride(&cfg, &cli)
+	if strings.TrimSpace(cfg.WorkerID) == "" {
+		cfg.WorkerID = autoWorkerID()
+	}
 	logger := mustBuildLogger(cfg)
 	slog.SetDefault(logger)
 	globals := &Globals{cfg: cfg, logger: logger}
@@ -142,6 +149,22 @@ func (c *RunCmd) Run(globals *Globals) error {
 		return trace.Wrap(err)
 	}
 	return runModes(globals, modes)
+}
+
+func applyCLIWorkerIDOverride(cfg *config.Config, cli *CLI) {
+	if cfg == nil || cli == nil {
+		return
+	}
+	if v := strings.TrimSpace(cli.Run.WorkerID); v != "" {
+		cfg.WorkerID = v
+	}
+	if v := strings.TrimSpace(cli.Worker.WorkerID); v != "" {
+		cfg.WorkerID = v
+	}
+}
+
+func autoWorkerID() string {
+	return fmt.Sprintf("worker-%d-%d", os.Getpid(), time.Now().UnixNano()%1_000_000)
 }
 
 func (c *TasksCreateCmd) Run(globals *Globals) error {

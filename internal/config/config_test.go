@@ -62,3 +62,27 @@ description = "Fetch HTTP resources from a URL."
 		t.Fatalf("unexpected curl description: %q", cfg.ToolDescriptions["curl"])
 	}
 }
+
+func TestLoad_ReadsUILabelsFromPolicyFile(t *testing.T) {
+	t.Setenv("POLICY_PATH", filepath.Join(t.TempDir(), "goclaw.toml"))
+	policyPath := os.Getenv("POLICY_PATH")
+	content := `
+[ui]
+user_label = "operator"
+assistant_label = "clawbot"
+`
+	if err := os.WriteFile(policyPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write policy file: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.UIUserLabel != "operator" {
+		t.Fatalf("unexpected UIUserLabel: %q", cfg.UIUserLabel)
+	}
+	if cfg.UIAssistantLabel != "clawbot" {
+		t.Fatalf("unexpected UIAssistantLabel: %q", cfg.UIAssistantLabel)
+	}
+}

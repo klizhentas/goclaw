@@ -38,7 +38,7 @@ If no subcommand is provided, CLI returns an error with usage guidance.
 Runs one or more modes concurrently.
 
 ```bash
-build/goclaw run --mode=<term|worker|scheduler|single>[,...]
+build/goclaw run --mode=<term|worker|scheduler|single>[,...] [--worker-id <id>]
 ```
 
 Examples:
@@ -46,6 +46,7 @@ Examples:
 ```bash
 build/goclaw run --mode=term,scheduler
 build/goclaw run --mode=worker
+build/goclaw run --mode=worker --worker-id worker-2
 build/goclaw run --mode=single
 ```
 
@@ -67,20 +68,24 @@ Behavior:
 - Enqueues inbound messages to SQLite queue.
 - Polls outbound queue and prints assistant responses.
 - Updates active conversation in-place when responses arrive.
+- Supports explicit conversation commands in input:
+  - `/new <conversation_id>`
+  - `/switch <conversation_id>`
+  - `/help`
+- Supports a debug dashboard toggle via `Ctrl+g`.
+- Status panel shows last keypress and runtime hints.
+- Re-pressing an already selected `Alt+<n>` tab flashes the tab briefly as press feedback.
+- Debug dashboard shows yellow warnings when worker capacity is insufficient (for example, open conversations exceed observed workers).
 
 Input format:
 
 ```text
-<message>
-or
-<conversation_id>: <message>
-```
-
-Example:
-
-```text
-hello
-room-1: @Andy summarize this
+<message>                     # send to active conversation
+/new [conversation_id]        # create/select conversation (auto: default-<n> if omitted)
+/switch <conversation_id>     # switch to existing conversation
+/rename <conversation_id>     # rename current conversation
+/help                         # list command hints
+/quit or /exit                # exit terminal UI
 ```
 
 Shortcuts:
@@ -88,13 +93,20 @@ Shortcuts:
 - `Alt+1..9`: switch conversation by index
 - `Ctrl+n` / `Ctrl+p`: next/previous conversation
 - `Tab` / `Shift+Tab`: cycle conversations
+- `Ctrl+g`: toggle debug dashboard
 - `Enter`: send
 - `Esc`: clear input
 - `Ctrl+c`: quit
 
+In debug dashboard mode, `Tab`/`Shift+Tab` and `Ctrl+n`/`Ctrl+p` cycle debug sections (Summary, Queue, Workers/Schedulers, Last Runs).
+
 ### `worker`
 
 Starts worker mode.
+
+```bash
+build/goclaw worker [--worker-id <id>]
+```
 
 Behavior:
 
@@ -102,6 +114,7 @@ Behavior:
 - Builds prompt and calls configured model backend.
 - Persists assistant response.
 - Enqueues outbound queue message.
+- `--worker-id` overrides worker identity for this process.
 
 ### `scheduler`
 
@@ -264,6 +277,10 @@ cp assets/goclaw.toml data/goclaw.toml
 Example allowlist:
 
 ```toml
+[ui]
+user_label = "you"
+assistant_label = "goclaw"
+
 [[allow.tool]]
 name = "echo"
 description = "Print text to stdout."
@@ -279,6 +296,7 @@ description = "Print current local date and time."
 
 `[[allow.tool]]` entries define both the allowlist and descriptions injected into the model system prompt to improve tool selection.
 When allowlist is non-empty, worker exposes `exec_local_tool` and backend-enforces command allowlist.
+`[ui]` labels are used by terminal chat rendering.
 
 ## Environment Variables
 
@@ -291,9 +309,11 @@ Core paths and runtime:
 
 Identity / routing:
 
-- `WORKER_ID` default `worker-1`
+- `WORKER_ID` default auto-generated (`worker-<pid>-<suffix>`)
 - `SENDER_ID` default `sender-1`
 - `SCHEDULER_ID` default `scheduler-1`
+
+For multi-worker setups, set a unique `WORKER_ID` per process (for example `worker-1`, `worker-2`), otherwise diagnostics will show them as one worker.
 
 Concurrency / timing:
 
@@ -311,6 +331,8 @@ Assistant behavior:
 - `MAIN_NEEDS_TRIGGER` default `false`
 - `HISTORY_WINDOW` default `20`
 - `LOG_LEVEL` default `INFO`
+- `UI_USER_LABEL` default `you`
+- `UI_ASSISTANT_LABEL` default `goclaw`
 
 ## Logging
 

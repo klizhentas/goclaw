@@ -1,6 +1,6 @@
 # goclaw
 
-![gopherclaw](assets/gopherclaw.png)
+<img src="assets/gopherclaw.png" alt="gopherclaw" width="220" />
 
 Minimal Go assistant runtime with SQLite-backed queues, worker/scheduler loops, and an OpenAI model backend.
 
