@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/gravitational/trace"
 )
 
 type Result struct {
@@ -50,7 +51,7 @@ func (e *Executor) AllowedTools() []string {
 
 func (e *Executor) Execute(ctx context.Context, tool string, args []string) (Result, error) {
 	if _, ok := e.allowed[tool]; !ok {
-		return Result{}, fmt.Errorf("tool %q is not allowlisted; allowed=%v", tool, e.AllowedTools())
+		return Result{}, trace.AccessDenied("tool %q is not allowlisted; allowed=%v", tool, e.AllowedTools())
 	}
 
 	cmd := exec.CommandContext(ctx, tool, args...)
@@ -69,7 +70,7 @@ func (e *Executor) Execute(ctx context.Context, tool string, args []string) (Res
 		return Result{Stdout: limitOutput(stdout.String()), ReturnCode: exitErr.ExitCode()}, nil
 	}
 
-	return Result{}, fmt.Errorf("execute tool %q: %w", tool, err)
+	return Result{}, trace.Wrap(err)
 }
 
 func limitOutput(raw string) string {

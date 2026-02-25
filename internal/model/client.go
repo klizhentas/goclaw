@@ -2,8 +2,8 @@ package model
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/gravitational/trace"
 	"github.com/klizhentas/goclaw/internal/config"
 	"github.com/klizhentas/goclaw/internal/prompt"
 )
@@ -24,11 +24,11 @@ func NewClient(cfg config.Config) (Client, error) {
 		return &EchoClient{}, nil
 	case "openai":
 		if cfg.OpenAIAPIKey == "" {
-			return nil, fmt.Errorf("OPENAI_API_KEY is required when MODEL_BACKEND=openai")
+			return nil, trace.BadParameter("OPENAI_API_KEY is required when MODEL_BACKEND=openai")
 		}
 		return NewOpenAIClient(cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.OpenAIBaseURL, cfg.AllowedTools), nil
 	default:
-		return nil, fmt.Errorf("unsupported MODEL_BACKEND: %s", cfg.ModelBackend)
+		return nil, trace.BadParameter("unsupported MODEL_BACKEND: %s", cfg.ModelBackend)
 	}
 }
 

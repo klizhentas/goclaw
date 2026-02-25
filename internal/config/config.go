@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -9,6 +8,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/gravitational/trace"
 )
 
 type Config struct {
@@ -76,22 +76,22 @@ func Load() (Config, error) {
 	cfg.AllowedTools = allowedTools
 
 	if cfg.MaxActiveConversations < 1 {
-		return Config{}, fmt.Errorf("MAX_ACTIVE_CONVERSATIONS must be >= 1")
+		return Config{}, trace.BadParameter("MAX_ACTIVE_CONVERSATIONS must be >= 1")
 	}
 	if cfg.HistoryWindow < 1 {
-		return Config{}, fmt.Errorf("HISTORY_WINDOW must be >= 1")
+		return Config{}, trace.BadParameter("HISTORY_WINDOW must be >= 1")
 	}
 	if cfg.AssistantName == "" {
-		return Config{}, fmt.Errorf("ASSISTANT_NAME must be non-empty")
+		return Config{}, trace.BadParameter("ASSISTANT_NAME must be non-empty")
 	}
 	if cfg.QueuePollInterval <= 0 {
-		return Config{}, fmt.Errorf("QUEUE_POLL_INTERVAL_MS must be > 0")
+		return Config{}, trace.BadParameter("QUEUE_POLL_INTERVAL_MS must be > 0")
 	}
 	if cfg.TaskLeaseDuration <= 0 {
-		return Config{}, fmt.Errorf("TASK_LEASE_SECONDS must be > 0")
+		return Config{}, trace.BadParameter("TASK_LEASE_SECONDS must be > 0")
 	}
 	if cfg.SchedulerConcurrency < 1 {
-		return Config{}, fmt.Errorf("SCHEDULER_CONCURRENCY must be >= 1")
+		return Config{}, trace.BadParameter("SCHEDULER_CONCURRENCY must be >= 1")
 	}
 
 	return cfg, nil
@@ -102,12 +102,12 @@ func loadAllowedTools(path string) ([]string, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("stat policy file %q: %w", path, err)
+		return nil, trace.Wrap(err)
 	}
 
 	var policy policyFile
 	if _, err := toml.DecodeFile(path, &policy); err != nil {
-		return nil, fmt.Errorf("decode policy file %q: %w", path, err)
+		return nil, trace.Wrap(err)
 	}
 
 	tools := make([]string, 0, len(policy.Allow.Tools))

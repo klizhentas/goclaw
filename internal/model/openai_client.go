@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gravitational/trace"
 	"github.com/klizhentas/goclaw/internal/prompt"
 	"github.com/klizhentas/goclaw/internal/tools"
 )
@@ -117,7 +118,7 @@ func (c *OpenAIClient) StreamResponse(ctx context.Context, messages []prompt.Pro
 			return "", err
 		}
 		if len(parsed.Choices) == 0 {
-			return "", fmt.Errorf("openai returned no choices")
+			return "", trace.BadParameter("openai returned no choices")
 		}
 
 		message := parsed.Choices[0].Message
@@ -148,7 +149,7 @@ func (c *OpenAIClient) StreamResponse(ctx context.Context, messages []prompt.Pro
 		}
 	}
 
-	return "", fmt.Errorf("max tool-call steps reached")
+	return "", trace.LimitExceeded("max tool-call steps reached")
 }
 
 func (c *OpenAIClient) handleToolCall(ctx context.Context, toolCall openAIToolCall) string {
@@ -198,36 +199,36 @@ func (c *OpenAIClient) handleToolCall(ctx context.Context, toolCall openAIToolCa
 func (c *OpenAIClient) chatCompletion(ctx context.Context, reqPayload openAIRequest) (openAIResponse, string, error) {
 	payload, err := json.Marshal(reqPayload)
 	if err != nil {
-		return openAIResponse{}, "", fmt.Errorf("marshal request: %w", err)
+		return openAIResponse{}, "", trace.Wrap(err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(payload))
 	if err != nil {
-		return openAIResponse{}, "", fmt.Errorf("build request: %w", err)
+		return openAIResponse{}, "", trace.Wrap(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return openAIResponse{}, "", fmt.Errorf("perform request: %w", err)
+		return openAIResponse{}, "", trace.Wrap(err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
-		return openAIResponse{}, "", fmt.Errorf("read response: %w", err)
+		return openAIResponse{}, "", trace.Wrap(err)
 	}
 
 	var parsed openAIResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return openAIResponse{}, resp.Status, fmt.Errorf("decode response: %w", err)
+		return openAIResponse{}, resp.Status, trace.Wrap(err)
 	}
 	if resp.StatusCode >= 300 {
 		if parsed.Error != nil && parsed.Error.Message != "" {
-			return openAIResponse{}, resp.Status, fmt.Errorf("openai error: %s", parsed.Error.Message)
+			return openAIResponse{}, resp.Status, trace.AccessDenied(parsed.Error.Message)
 		}
-		return openAIResponse{}, resp.Status, fmt.Errorf("openai http status: %s", resp.Status)
+		return openAIResponse{}, resp.Status, trace.AccessDenied("openai http status: %s", resp.Status)
 	}
 	return parsed, resp.Status, nil
 }
@@ -253,19 +254,19 @@ func execToolDefinition() openAITool {
 func (c *OpenAIClient) StartupCheck(ctx context.Context) (map[string]any, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/models", nil)
 	if err != nil {
-		return nil, fmt.Errorf("build diagnostics request: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("perform diagnostics request: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
-		return nil, fmt.Errorf("read diagnostics response: %w", err)
+		return nil, trace.Wrap(err)
 	}
 
 	info := map[string]any{
@@ -280,7 +281,7 @@ func (c *OpenAIClient) StartupCheck(ctx context.Context) (map[string]any, error)
 	var parsed openAIModelsResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		info["http_status"] = resp.Status
-		return info, fmt.Errorf("decode diagnostics response: %w", err)
+		return info, trace.Wrap(err)
 	}
 
 	if resp.StatusCode >= 300 {
@@ -288,9 +289,9 @@ func (c *OpenAIClient) StartupCheck(ctx context.Context) (map[string]any, error)
 		if parsed.Error != nil {
 			info["error_type"] = parsed.Error.Type
 			info["error_code"] = parsed.Error.Code
-			return info, fmt.Errorf("openai diagnostics error: %s", parsed.Error.Message)
+			return info, trace.AccessDenied(parsed.Error.Message)
 		}
-		return info, fmt.Errorf("openai diagnostics http status: %s", resp.Status)
+		return info, trace.AccessDenied("openai diagnostics http status: %s", resp.Status)
 	}
 
 	info["http_status"] = resp.Status
@@ -331,7 +332,7 @@ func normalizeExecArgs(raw string, parsed execLocalToolArgs) (execLocalToolArgs,
 
 	var generic map[string]any
 	if err := json.Unmarshal([]byte(raw), &generic); err != nil {
-		return execLocalToolArgs{}, fmt.Errorf("cannot parse generic args: %w", err)
+		return execLocalToolArgs{}, trace.Wrap(err)
 	}
 
 	tool := firstNonEmptyString(
@@ -372,7 +373,7 @@ func normalizeExecArgs(raw string, parsed execLocalToolArgs) (execLocalToolArgs,
 	}
 
 	if strings.TrimSpace(tool) == "" {
-		return execLocalToolArgs{}, fmt.Errorf("missing tool name in arguments: %s", raw)
+		return execLocalToolArgs{}, trace.BadParameter("missing tool name in arguments: %s", raw)
 	}
 
 	return execLocalToolArgs{Tool: strings.TrimSpace(tool), Args: args}, nil

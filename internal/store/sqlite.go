@@ -5,11 +5,11 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/gravitational/trace"
 	_ "modernc.org/sqlite"
 
 	"github.com/klizhentas/goclaw/internal/types"
@@ -21,12 +21,12 @@ type SQLiteStore struct {
 
 func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create db directory: %w", err)
+		return nil, trace.Wrap(err)
 	}
 
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		return nil, trace.Wrap(err)
 	}
 
 	store := &SQLiteStore{db: db}
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_created
 	ON task_runs(task_id, created_at, id);
 `); err != nil {
-		return fmt.Errorf("init schema: %w", err)
+		return trace.Wrap(err)
 	}
 	return nil
 }
@@ -124,7 +124,7 @@ VALUES (?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING;
 `, conversationID, role, nowUTC(), nowUTC())
 	if err != nil {
-		return fmt.Errorf("create conversation: %w", err)
+		return trace.Wrap(err)
 	}
 	return nil
 }
@@ -147,7 +147,7 @@ INSERT INTO messages (id, conversation_id, role, content, created_at)
 VALUES (?, ?, ?, ?, ?);
 `, msg.ID, msg.ConversationID, msg.Role, msg.Content, msg.CreatedAt)
 	if err != nil {
-		return types.Message{}, fmt.Errorf("append message: %w", err)
+		return types.Message{}, trace.Wrap(err)
 	}
 	return msg, nil
 }
@@ -164,7 +164,7 @@ ORDER BY created_at DESC, id DESC
 LIMIT ?;
 `, conversationID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("query recent messages: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	defer rows.Close()
 
@@ -172,12 +172,12 @@ LIMIT ?;
 	for rows.Next() {
 		var msg types.Message
 		if err := rows.Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan message: %w", err)
+			return nil, trace.Wrap(err)
 		}
 		recent = append(recent, msg)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate messages: %w", err)
+		return nil, trace.Wrap(err)
 	}
 
 	for i, j := 0, len(recent)-1; i < j; i, j = i+1, j-1 {
@@ -213,7 +213,7 @@ INSERT INTO queue_messages (id, conversation_id, direction, content, status, cre
 VALUES (?, ?, ?, ?, ?, ?, ?);
 `, item.ID, item.ConversationID, item.Direction, item.Content, item.Status, item.CreatedAt, item.RelatedMessageID)
 	if err != nil {
-		return types.QueueMessage{}, fmt.Errorf("enqueue inbound: %w", err)
+		return types.QueueMessage{}, trace.Wrap(err)
 	}
 	return item, nil
 }
@@ -238,7 +238,7 @@ INSERT INTO queue_messages (id, conversation_id, direction, content, status, cre
 VALUES (?, ?, ?, ?, ?, ?, ?);
 `, item.ID, item.ConversationID, item.Direction, item.Content, item.Status, item.CreatedAt, item.RelatedMessageID)
 	if err != nil {
-		return types.QueueMessage{}, fmt.Errorf("enqueue outbound: %w", err)
+		return types.QueueMessage{}, trace.Wrap(err)
 	}
 	return item, nil
 }
@@ -254,7 +254,7 @@ func (s *SQLiteStore) ClaimNextOutbound(ctx context.Context, workerID string) (*
 func (s *SQLiteStore) claimNextByDirection(ctx context.Context, workerID string, direction types.QueueDirection) (*types.QueueMessage, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("begin tx: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -278,11 +278,11 @@ LIMIT 1;
 	if err != nil {
 		if err == sql.ErrNoRows {
 			if err := tx.Commit(); err != nil {
-				return nil, fmt.Errorf("commit empty claim tx: %w", err)
+				return nil, trace.Wrap(err)
 			}
 			return nil, nil
 		}
-		return nil, fmt.Errorf("select pending %s: %w", direction, err)
+		return nil, trace.Wrap(err, "select pending %s", direction)
 	}
 	if related.Valid {
 		item.RelatedMessageID = related.String
@@ -295,21 +295,21 @@ SET status = ?, worker_id = ?, claimed_at = ?
 WHERE id = ? AND status = ?;
 `, types.QueueStatusProcessing, workerID, claimedAt, item.ID, types.QueueStatusPending)
 	if err != nil {
-		return nil, fmt.Errorf("claim %s: %w", direction, err)
+		return nil, trace.Wrap(err, "claim %s", direction)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return nil, fmt.Errorf("claim rows affected: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	if affected != 1 {
 		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("commit stale claim tx: %w", err)
+			return nil, trace.Wrap(err)
 		}
 		return nil, nil
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit claim tx: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	item.Status = types.QueueStatusProcessing
 	item.WorkerID = workerID
@@ -324,7 +324,7 @@ SET status = ?, processed_at = ?
 WHERE id = ?;
 `, types.QueueStatusDone, nowUTC(), id)
 	if err != nil {
-		return fmt.Errorf("mark queue done: %w", err)
+		return trace.Wrap(err)
 	}
 	return nil
 }
@@ -336,7 +336,7 @@ SET status = ?, processed_at = ?, error = ?
 WHERE id = ?;
 `, types.QueueStatusError, nowUTC(), errMessage, id)
 	if err != nil {
-		return fmt.Errorf("mark queue error: %w", err)
+		return trace.Wrap(err)
 	}
 	return nil
 }
@@ -374,7 +374,7 @@ INSERT INTO tasks (id, conversation_id, payload, schedule_type, run_at, interval
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `, task.ID, task.ConversationID, task.Payload, task.ScheduleType, nullableTime(task.RunAt), task.IntervalSec, task.Status, task.NextRunAt, task.CreatedAt, task.UpdatedAt)
 	if err != nil {
-		return types.Task{}, fmt.Errorf("create task: %w", err)
+		return types.Task{}, trace.Wrap(err)
 	}
 	return task, nil
 }
@@ -394,7 +394,7 @@ WHERE status != ?`
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list tasks: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	defer rows.Close()
 
@@ -407,7 +407,7 @@ WHERE status != ?`
 		result = append(result, task)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tasks: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	return result, nil
 }
@@ -419,7 +419,7 @@ SET status = ?, updated_at = ?, assigned_scheduler_id = NULL, lease_expires_at =
 WHERE id = ?;
 `, types.TaskStatusDeleted, nowUTC(), taskID)
 	if err != nil {
-		return fmt.Errorf("remove task: %w", err)
+		return trace.Wrap(err)
 	}
 	return nil
 }
@@ -427,7 +427,7 @@ WHERE id = ?;
 func (s *SQLiteStore) ClaimDueTask(ctx context.Context, schedulerID string, lease time.Duration) (*types.Task, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("begin claim task tx: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -450,11 +450,11 @@ LIMIT 1;
 	if err := scanTaskFromRow(row, &task); err != nil {
 		if err == sql.ErrNoRows {
 			if err := tx.Commit(); err != nil {
-				return nil, fmt.Errorf("commit empty task claim tx: %w", err)
+				return nil, trace.Wrap(err)
 			}
 			return nil, nil
 		}
-		return nil, fmt.Errorf("select due task: %w", err)
+		return nil, trace.Wrap(err)
 	}
 
 	leaseUntil := now.Add(lease)
@@ -467,21 +467,21 @@ WHERE id = ?
   AND (assigned_scheduler_id IS NULL OR assigned_scheduler_id = '' OR lease_expires_at IS NULL OR lease_expires_at <= ?);
 `, schedulerID, leaseUntil, now, task.ID, types.TaskStatusActive, now, now)
 	if err != nil {
-		return nil, fmt.Errorf("claim task cas update: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return nil, fmt.Errorf("claim task rows affected: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	if affected != 1 {
 		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("commit stale task claim tx: %w", err)
+			return nil, trace.Wrap(err)
 		}
 		return nil, nil
 	}
 
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit task claim tx: %w", err)
+		return nil, trace.Wrap(err)
 	}
 	task.AssignedSchedulerID = schedulerID
 	task.LeaseExpiresAt = &leaseUntil
@@ -510,7 +510,7 @@ INSERT INTO task_runs (id, task_id, conversation_id, payload, status, scheduler_
 VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 `, run.ID, run.TaskID, run.ConversationID, run.Payload, run.Status, run.SchedulerID, run.StartedAt, run.CreatedAt)
 	if err != nil {
-		return types.TaskRun{}, fmt.Errorf("create task run: %w", err)
+		return types.TaskRun{}, trace.Wrap(err)
 	}
 	return run, nil
 }
@@ -522,7 +522,7 @@ SET inbound_queue_message_id = ?
 WHERE id = ?;
 `, queueMessageID, runID)
 	if err != nil {
-		return fmt.Errorf("set task run inbound queue message id: %w", err)
+		return trace.Wrap(err)
 	}
 	return nil
 }
@@ -534,7 +534,7 @@ SET assigned_scheduler_id = NULL, lease_expires_at = NULL, updated_at = ?
 WHERE id = ?;
 `, nowUTC(), taskID)
 	if err != nil {
-		return fmt.Errorf("release task claim: %w", err)
+		return trace.Wrap(err)
 	}
 	return nil
 }
@@ -550,13 +550,13 @@ func (s *SQLiteStore) CompleteTaskRunFailure(ctx context.Context, runID, errorMe
 func (s *SQLiteStore) completeTaskRun(ctx context.Context, runID string, success bool, resultContent, errorMessage, assistantMessageID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin complete task run tx: %w", err)
+		return trace.Wrap(err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	var taskID string
 	if err := tx.QueryRowContext(ctx, `SELECT task_id FROM task_runs WHERE id = ?;`, runID).Scan(&taskID); err != nil {
-		return fmt.Errorf("select task_id for run %s: %w", runID, err)
+		return trace.Wrap(err, "select task_id for run %s", runID)
 	}
 
 	now := nowUTC()
@@ -567,14 +567,14 @@ SET status = ?, finished_at = ?, result_content = ?, error = NULL, assistant_mes
 WHERE id = ?;
 `, types.TaskRunStatusSuccess, now, resultContent, assistantMessageID, runID)
 		if err != nil {
-			return fmt.Errorf("update task run success: %w", err)
+			return trace.Wrap(err)
 		}
 
 		var scheduleType types.TaskScheduleType
 		var intervalSec int
 		var status types.TaskStatus
 		if err := tx.QueryRowContext(ctx, `SELECT schedule_type, interval_sec, status FROM tasks WHERE id = ?;`, taskID).Scan(&scheduleType, &intervalSec, &status); err != nil {
-			return fmt.Errorf("select task scheduling info: %w", err)
+			return trace.Wrap(err)
 		}
 
 		if scheduleType == types.TaskScheduleTypeInterval && status == types.TaskStatusActive {
@@ -585,7 +585,7 @@ SET next_run_at = ?, failure_count = 0, last_error = NULL, assigned_scheduler_id
 WHERE id = ?;
 `, nextRun, now, taskID)
 			if err != nil {
-				return fmt.Errorf("update recurring task after success: %w", err)
+				return trace.Wrap(err)
 			}
 		} else {
 			_, err = tx.ExecContext(ctx, `
@@ -594,7 +594,7 @@ SET status = ?, failure_count = 0, last_error = NULL, assigned_scheduler_id = NU
 WHERE id = ?;
 `, types.TaskStatusCompleted, now, taskID)
 			if err != nil {
-				return fmt.Errorf("update one-shot task after success: %w", err)
+				return trace.Wrap(err)
 			}
 		}
 	} else {
@@ -604,12 +604,12 @@ SET status = ?, finished_at = ?, error = ?, result_content = NULL
 WHERE id = ?;
 `, types.TaskRunStatusFailed, now, errorMessage, runID)
 		if err != nil {
-			return fmt.Errorf("update task run failure: %w", err)
+			return trace.Wrap(err)
 		}
 
 		var failureCount int
 		if err := tx.QueryRowContext(ctx, `SELECT failure_count FROM tasks WHERE id = ?;`, taskID).Scan(&failureCount); err != nil {
-			return fmt.Errorf("select task failure count: %w", err)
+			return trace.Wrap(err)
 		}
 		failureCount++
 		nextRun := now.Add(backoffForFailures(failureCount))
@@ -619,12 +619,12 @@ SET next_run_at = ?, failure_count = ?, last_error = ?, assigned_scheduler_id = 
 WHERE id = ?;
 `, nextRun, failureCount, errorMessage, now, taskID)
 		if err != nil {
-			return fmt.Errorf("update task after failure: %w", err)
+			return trace.Wrap(err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit complete task run tx: %w", err)
+		return trace.Wrap(err)
 	}
 	return nil
 }
@@ -636,20 +636,20 @@ func (s *SQLiteStore) UpdateTaskRun(ctx context.Context, runID string, status ty
 	case types.TaskRunStatusFailed:
 		return s.CompleteTaskRunFailure(ctx, runID, errorMessage)
 	default:
-		return fmt.Errorf("unsupported task run update status %q", status)
+		return trace.BadParameter("unsupported task run update status %q", status)
 	}
 }
 
 func (s *SQLiteStore) UpdateTaskRunAuthorized(ctx context.Context, runID, callerID string, status types.TaskRunStatus, resultContent, errorMessage, assistantMessageID string) error {
 	var schedulerID sql.NullString
 	if err := s.db.QueryRowContext(ctx, `SELECT scheduler_id FROM task_runs WHERE id = ?;`, runID).Scan(&schedulerID); err != nil {
-		return fmt.Errorf("load task run for authorization: %w", err)
+		return trace.Wrap(err)
 	}
 	if callerID == "" {
-		return fmt.Errorf("caller_id is required")
+		return trace.BadParameter("caller_id is required")
 	}
 	if schedulerID.Valid && schedulerID.String != "" && schedulerID.String != callerID {
-		return fmt.Errorf("caller %q is not allowed to update run %q assigned to %q", callerID, runID, schedulerID.String)
+		return trace.AccessDenied("caller %q is not allowed to update run %q assigned to %q", callerID, runID, schedulerID.String)
 	}
 	return s.UpdateTaskRun(ctx, runID, status, resultContent, errorMessage, assistantMessageID)
 }
@@ -676,7 +676,7 @@ func scanTask(rows *sql.Rows) (types.Task, error) {
 		&task.CreatedAt,
 		&task.UpdatedAt,
 	); err != nil {
-		return types.Task{}, fmt.Errorf("scan task: %w", err)
+		return types.Task{}, trace.Wrap(err)
 	}
 	if runAt.Valid {
 		t := runAt.Time
@@ -761,7 +761,7 @@ func backoffForFailures(failures int) time.Duration {
 func newID() (string, error) {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate id: %w", err)
+		return "", trace.Wrap(err)
 	}
 	return hex.EncodeToString(buf), nil
 }

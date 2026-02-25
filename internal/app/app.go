@@ -3,13 +3,13 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gravitational/trace"
 	"github.com/klizhentas/goclaw/internal/config"
 	"github.com/klizhentas/goclaw/internal/conversation"
 	"github.com/klizhentas/goclaw/internal/listener"
@@ -74,7 +74,7 @@ func (a *App) Run(ctx context.Context, mode string) error {
 	case "single", "":
 		return a.RunSingle(ctx)
 	default:
-		return fmt.Errorf("unsupported mode %q (use sender|worker|scheduler|single)", mode)
+		return trace.BadParameter("unsupported mode %q (use sender|worker|scheduler|single)", mode)
 	}
 }
 
@@ -302,7 +302,7 @@ func (a *App) processQueuedMessage(ctx context.Context, item types.QueueMessage)
 		a.markQueueError(ctx, item.ID, err)
 		a.failLinkedTaskRun(ctx, item.RelatedMessageID, err)
 		a.logger.Error("stage error", "conversation_id", item.ConversationID, "message_id", userMsg.ID, "stage", "model_stream", "duration_ms", time.Since(modelStart).Milliseconds(), "error", err)
-		return fmt.Errorf("model stream: %w", err)
+		return trace.Wrap(err)
 	}
 	if response == "" {
 		response = full.String()

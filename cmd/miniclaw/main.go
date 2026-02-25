@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gravitational/trace"
 	"github.com/klizhentas/goclaw/internal/app"
 	"github.com/klizhentas/goclaw/internal/config"
 	"github.com/klizhentas/goclaw/internal/store"
@@ -81,7 +82,7 @@ func mustBuildLogger(cfg config.Config) *slog.Logger {
 
 func runTasksCommand(ctx context.Context, cfg config.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: goclaw tasks <create|ls|rm|update>")
+		return trace.BadParameter("usage: goclaw tasks <create|ls|rm|update>")
 	}
 
 	st, err := store.NewSQLiteStore(cfg.DatabasePath)
@@ -104,17 +105,17 @@ func runTasksCommand(ctx context.Context, cfg config.Config, args []string) erro
 			return err
 		}
 		if strings.TrimSpace(*conversationID) == "" {
-			return fmt.Errorf("--conversation is required")
+			return trace.BadParameter("--conversation is required")
 		}
 		if strings.TrimSpace(*payload) == "" {
-			return fmt.Errorf("--payload is required")
+			return trace.BadParameter("--payload is required")
 		}
 
 		var runAt *time.Time
 		if *runAtRaw != "" {
 			parsed, err := time.Parse(time.RFC3339, *runAtRaw)
 			if err != nil {
-				return fmt.Errorf("parse --at: %w", err)
+				return trace.Wrap(err)
 			}
 			runAt = &parsed
 		}
@@ -122,11 +123,11 @@ func runTasksCommand(ctx context.Context, cfg config.Config, args []string) erro
 		if *everyRaw != "" {
 			d, err := time.ParseDuration(*everyRaw)
 			if err != nil {
-				return fmt.Errorf("parse --every: %w", err)
+				return trace.Wrap(err)
 			}
 			intervalSec = int(d.Seconds())
 			if intervalSec < 1 {
-				return fmt.Errorf("--every must be >= 1s")
+				return trace.BadParameter("--every must be >= 1s")
 			}
 		}
 
@@ -160,7 +161,7 @@ func runTasksCommand(ctx context.Context, cfg config.Config, args []string) erro
 			return err
 		}
 		if strings.TrimSpace(*taskID) == "" {
-			return fmt.Errorf("--id is required")
+			return trace.BadParameter("--id is required")
 		}
 		if err := st.RemoveTask(ctx, *taskID); err != nil {
 			return err
@@ -180,10 +181,10 @@ func runTasksCommand(ctx context.Context, cfg config.Config, args []string) erro
 			return err
 		}
 		if strings.TrimSpace(*runID) == "" {
-			return fmt.Errorf("--run-id is required")
+			return trace.BadParameter("--run-id is required")
 		}
 		if strings.TrimSpace(*callerID) == "" {
-			return fmt.Errorf("--caller-id is required")
+			return trace.BadParameter("--caller-id is required")
 		}
 
 		var status types.TaskRunStatus
@@ -193,7 +194,7 @@ func runTasksCommand(ctx context.Context, cfg config.Config, args []string) erro
 		case "failed", "failure", "error":
 			status = types.TaskRunStatusFailed
 		default:
-			return fmt.Errorf("--status must be success|failed")
+			return trace.BadParameter("--status must be success|failed")
 		}
 
 		if err := st.UpdateTaskRunAuthorized(ctx, *runID, *callerID, status, *result, *errorMsg, *assistantMessageID); err != nil {
@@ -203,6 +204,6 @@ func runTasksCommand(ctx context.Context, cfg config.Config, args []string) erro
 		return nil
 
 	default:
-		return fmt.Errorf("unknown tasks subcommand %q", sub)
+		return trace.BadParameter("unknown tasks subcommand %q", sub)
 	}
 }
