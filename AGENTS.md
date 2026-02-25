@@ -8,6 +8,7 @@ Implement goclaw with a strict minimal-first approach: small, correct, locally t
 2. `GOCLAW.md` is a compatibility pointer only.
 3. If implementation details are unclear, prefer the latest accepted RFD over ad-hoc assumptions.
 4. If docs and code conflict, align code to accepted RFDs unless user says otherwise.
+5. Repository standards are defined in `rfds/0002-repo-guidelines.md`.
 
 ## Engineering Essentials
 1. Keep changes minimal, explicit, and test-backed.

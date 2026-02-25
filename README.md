@@ -103,6 +103,7 @@ build/miniclaw tasks update --run-id <run_id> --caller-id scheduler-1 --status s
 
 ```bash
 make fmt
+make vet
 make test
 make test-race
 ```

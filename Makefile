@@ -3,10 +3,13 @@ MODE ?= single
 BIN_DIR ?= build
 APP_BIN := $(BIN_DIR)/miniclaw
 
-.PHONY: fmt test test-race build run run-sender run-worker run-scheduler clean
+.PHONY: fmt vet test test-race build run run-sender run-worker run-scheduler clean
 
 fmt:
 	$(GO) fmt ./...
+
+vet:
+	$(GO) vet ./...
 
 test:
 	$(GO) test ./...

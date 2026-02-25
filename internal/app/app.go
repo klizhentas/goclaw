@@ -19,12 +19,13 @@ import (
 	"github.com/klizhentas/goclaw/internal/prompt"
 	"github.com/klizhentas/goclaw/internal/store"
 	"github.com/klizhentas/goclaw/internal/types"
+	"github.com/klizhentas/goclaw/pkg/storage"
 )
 
 type App struct {
 	cfg      config.Config
 	logger   *slog.Logger
-	store    *store.SQLiteStore
+	store    storage.Store
 	locks    *conversation.LockMap
 	sem      chan struct{}
 	model    model.Client
