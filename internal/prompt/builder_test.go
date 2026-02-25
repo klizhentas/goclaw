@@ -31,3 +31,13 @@ func TestBuildMessages_Truncate(t *testing.T) {
 		t.Fatalf("expected truncation, got %q", messages[1].Content)
 	}
 }
+
+func TestBuildSystemPrompt_IncludesConversationContext(t *testing.T) {
+	p := BuildSystemPrompt(types.ConversationRoleMain, "Andy", "main")
+	if !strings.Contains(p, `conversation_id="main"`) {
+		t.Fatalf("expected conversation context in system prompt, got %q", p)
+	}
+	if !strings.Contains(p, "default context for task operations") {
+		t.Fatalf("expected task context guidance in system prompt, got %q", p)
+	}
+}

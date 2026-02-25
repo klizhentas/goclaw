@@ -8,7 +8,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -20,11 +22,16 @@ import (
 )
 
 type CLI struct {
+	Run       RunCmd       `cmd:"" help:"Run one or more modes concurrently (example: run --mode=term,scheduler)."`
 	Term      TermCmd      `cmd:"" help:"Start terminal mode (enqueue user input, print outbound responses)." aliases:"terminal"`
 	Worker    WorkerCmd    `cmd:"" help:"Start worker mode (claim and process inbound queue messages)."`
 	Scheduler SchedulerCmd `cmd:"" help:"Start scheduler mode (claim due tasks and enqueue task runs)."`
 	Single    SingleCmd    `cmd:"" help:"Run single-process interactive mode."`
 	Tasks     TasksCmd     `cmd:"" help:"Manage task definitions and task runs."`
+}
+
+type RunCmd struct {
+	Mode string `name:"mode" required:"" help:"Comma-separated modes: term,worker,scheduler,single."`
 }
 
 type TermCmd struct{}
@@ -36,6 +43,7 @@ type TasksCmd struct {
 	Create TasksCreateCmd `cmd:"" help:"Create one-shot or recurring task."`
 	Ls     TasksLsCmd     `cmd:"" help:"List tasks." aliases:"list"`
 	Rm     TasksRmCmd     `cmd:"" help:"Soft-delete a task." aliases:"remove,delete"`
+	Status TasksStatusCmd `cmd:"" help:"Show scheduler/task/queue diagnostics in table format."`
 	Update TasksUpdateCmd `cmd:"" help:"Update a task run status (authorized backend path)."`
 }
 
@@ -52,6 +60,11 @@ type TasksLsCmd struct {
 
 type TasksRmCmd struct {
 	ID string `name:"id" required:"" help:"Task ID."`
+}
+
+type TasksStatusCmd struct {
+	Conversation string `name:"conversation" help:"Optional conversation ID filter."`
+	Limit        int    `name:"limit" default:"20" help:"Max number of task rows to display."`
 }
 
 type TasksUpdateCmd struct {
@@ -103,7 +116,7 @@ func main() {
 }
 
 func (c *TermCmd) Run(globals *Globals) error {
-	return runMode(globals, "sender")
+	return runMode(globals, "term")
 }
 
 func (c *WorkerCmd) Run(globals *Globals) error {
@@ -116,6 +129,14 @@ func (c *SchedulerCmd) Run(globals *Globals) error {
 
 func (c *SingleCmd) Run(globals *Globals) error {
 	return runMode(globals, "single")
+}
+
+func (c *RunCmd) Run(globals *Globals) error {
+	modes, err := parseModes(c.Mode)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return runModes(globals, modes)
 }
 
 func (c *TasksCreateCmd) Run(globals *Globals) error {
@@ -183,6 +204,90 @@ func (c *TasksRmCmd) Run(globals *Globals) error {
 	return nil
 }
 
+func (c *TasksStatusCmd) Run(globals *Globals) error {
+	st, err := store.NewSQLiteStore(globals.cfg.DatabasePath)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	defer st.Close()
+
+	diag, err := st.GetTaskDiagnostics(context.Background(), c.Conversation, c.Limit)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	defer w.Flush()
+
+	scope := diag.ConversationID
+	if scope == "" {
+		scope = "(all)"
+	}
+
+	fmt.Fprintln(w, "SYSTEM\tVALUE")
+	fmt.Fprintf(w, "generated_at\t%s\n", diag.GeneratedAt.Format(time.RFC3339))
+	fmt.Fprintf(w, "conversation_scope\t%s\n", scope)
+	fmt.Fprintf(w, "tasks_total\t%d\n", diag.TasksTotal)
+	fmt.Fprintf(w, "tasks_active_due_now\t%d\n", diag.TasksActiveDue)
+	fmt.Fprintf(w, "tasks_claimable_due_now\t%d\n", diag.TasksClaimable)
+	fmt.Fprintf(w, "tasks_leased\t%d\n", diag.TasksLeased)
+	fmt.Fprintf(w, "task_runs_queued\t%d\n", diag.TaskRunsQueued)
+	fmt.Fprintf(w, "task_runs_running\t%d\n", diag.TaskRunsRunning)
+	fmt.Fprintf(w, "workers_observed_5m\t%s\n", listOrNone(diag.WorkerIDs))
+	fmt.Fprintf(w, "schedulers_observed_15m\t%s\n", listOrNone(diag.SchedulerIDs))
+	fmt.Fprintf(w, "worker_capacity_hint\t%s\n", workerCapacityHint(diag))
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "QUEUE\tPENDING\tPROCESSING\tDONE\tERROR\tOLDEST_PENDING_AGE")
+	printQueueRow(w, diag.InboundQueue)
+	printQueueRow(w, diag.OutboundQueue)
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "TASK_ID\tCONVERSATION\tSTATUS\tSCHEDULE\tNEXT_RUN_AT\tLEASED_BY\tLEASE_EXPIRES_AT\tFAILURES\tLAST_RUN\tLAST_RUN_AT\tLAST_ERROR")
+	for _, t := range diag.TaskSnapshotRows {
+		leaseExpires := "-"
+		if t.LeaseExpiresAt != nil {
+			leaseExpires = t.LeaseExpiresAt.Format(time.RFC3339)
+		}
+		leasedBy := t.AssignedSchedulerID
+		if leasedBy == "" {
+			leasedBy = "-"
+		}
+		lastRun := t.LastRunStatus
+		if lastRun == "" {
+			lastRun = "-"
+		}
+		lastRunAt := "-"
+		if t.LastRunStartedAt != nil {
+			lastRunAt = t.LastRunStartedAt.Format(time.RFC3339)
+		}
+		lastErr := truncateForTable(t.LastError, 80)
+		if strings.TrimSpace(lastErr) == "" {
+			lastErr = "-"
+		}
+		fmt.Fprintf(
+			w,
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+			t.ID,
+			t.ConversationID,
+			t.Status,
+			t.ScheduleType,
+			t.NextRunAt.Format(time.RFC3339),
+			leasedBy,
+			leaseExpires,
+			t.FailureCount,
+			lastRun,
+			lastRunAt,
+			lastErr,
+		)
+	}
+	if len(diag.TaskSnapshotRows) == 0 {
+		fmt.Fprintln(w, "(no tasks)\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-")
+	}
+
+	return nil
+}
+
 func (c *TasksUpdateCmd) Run(globals *Globals) error {
 	st, err := store.NewSQLiteStore(globals.cfg.DatabasePath)
 	if err != nil {
@@ -207,17 +312,161 @@ func (c *TasksUpdateCmd) Run(globals *Globals) error {
 	return nil
 }
 
+func listOrNone(values []string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	return strings.Join(values, ",")
+}
+
+func workerCapacityHint(diag store.TaskDiagnostics) string {
+	workers := len(diag.WorkerIDs)
+	pending := diag.InboundQueue.Pending
+	processing := diag.InboundQueue.Processing
+
+	switch {
+	case pending == 0 && processing == 0:
+		return "OK (no inbound backlog)"
+	case workers == 0 && (pending > 0 || processing > 0):
+		return "NO (no workers observed in last 5m)"
+	case pending > workers*2:
+		return "LOW (pending backlog exceeds observed workers)"
+	default:
+		return "OK"
+	}
+}
+
+func printQueueRow(w *tabwriter.Writer, q store.QueueDirectionStatus) {
+	age := "-"
+	if q.OldestPendingAt != nil {
+		age = fmt.Sprintf("%ds", q.OldestPendingAgeS)
+	}
+	fmt.Fprintf(
+		w,
+		"%s\t%d\t%d\t%d\t%d\t%s\n",
+		q.Direction,
+		q.Pending,
+		q.Processing,
+		q.Done,
+		q.Error,
+		age,
+	)
+}
+
+func truncateForTable(raw string, max int) string {
+	if len(raw) <= max {
+		return raw
+	}
+	if max <= 3 {
+		return raw[:max]
+	}
+	return strings.TrimSpace(raw[:max-3]) + "..."
+}
+
 func runMode(globals *Globals, mode string) error {
+	modes, err := parseModes(mode)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	if len(modes) != 1 {
+		return trace.BadParameter("expected single mode, got %q", mode)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return trace.Wrap(runModeWithContext(ctx, globals, modes[0]))
+}
+
+func runModes(globals *Globals, modes []string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if len(modes) == 1 {
+		return trace.Wrap(runModeWithContext(ctx, globals, modes[0]))
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type modeResult struct {
+		mode string
+		err  error
+	}
+	resultCh := make(chan modeResult, len(modes))
+	var wg sync.WaitGroup
+	for _, mode := range modes {
+		mode := mode
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := runModeWithContext(runCtx, globals, mode)
+			resultCh <- modeResult{mode: mode, err: err}
+			cancel()
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wg.Wait()
+	}()
+
+	select {
+	case result := <-resultCh:
+		<-done
+		if result.err != nil {
+			return trace.Wrap(result.err, "mode=%s", result.mode)
+		}
+		return nil
+	case <-done:
+		return nil
+	}
+}
+
+func runModeWithContext(ctx context.Context, globals *Globals, mode string) error {
 	application, err := app.New(globals.cfg, globals.logger)
 	if err != nil {
 		return trace.Wrap(err)
 	}
 	defer application.Close()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	return trace.Wrap(application.Run(ctx, mode))
+}
+
+func parseModes(raw string) ([]string, error) {
+	fields := strings.Split(strings.ToLower(strings.TrimSpace(raw)), ",")
+	seen := make(map[string]struct{})
+	modes := make([]string, 0, len(fields))
+	for _, f := range fields {
+		m := strings.TrimSpace(f)
+		if m == "" {
+			continue
+		}
+		switch m {
+		case "term":
+		case "worker":
+		case "scheduler":
+		case "single":
+		default:
+			return nil, trace.BadParameter("unsupported mode %q (use term,worker,scheduler,single)", m)
+		}
+		if _, ok := seen[m]; ok {
+			continue
+		}
+		seen[m] = struct{}{}
+		modes = append(modes, m)
+	}
+	if len(modes) == 0 {
+		return nil, trace.BadParameter("--mode must include at least one mode")
+	}
+	if len(modes) > 1 {
+		for _, m := range modes {
+			if m == "single" {
+				return nil, trace.BadParameter("mode single cannot be combined with other modes")
+			}
+		}
+	}
+	return modes, nil
 }
 
 func mustBuildLogger(cfg config.Config) *slog.Logger {

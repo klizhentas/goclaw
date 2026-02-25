@@ -3,7 +3,7 @@ CMD ?= single
 BIN_DIR ?= build
 APP_BIN := $(BIN_DIR)/goclaw
 
-.PHONY: fmt vet test test-race build run run-sender run-worker run-scheduler clean
+.PHONY: fmt vet test test-race build run run-term run-worker run-scheduler clean
 
 fmt:
 	$(GO) fmt ./...
@@ -22,18 +22,18 @@ build:
 	$(GO) build -o $(APP_BIN) ./cmd/goclaw
 
 run:
-	$(APP_BIN) $(CMD)
+	$(APP_BIN) run --mode=$(CMD)
 
 run: build
 
-run-sender: build
-	$(APP_BIN) term
+run-term: build
+	$(APP_BIN) run --mode=term,scheduler
 
 run-worker: build
-	$(APP_BIN) worker
+	$(APP_BIN) run --mode=worker
 
 run-scheduler: build
-	$(APP_BIN) scheduler
+	$(APP_BIN) run --mode=scheduler
 
 clean:
 	rm -rf $(BIN_DIR)

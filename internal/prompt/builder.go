@@ -12,8 +12,15 @@ type PromptMessage struct {
 	Content string
 }
 
-func BuildSystemPrompt(conversationRole types.ConversationRole, assistantName string) string {
-	return fmt.Sprintf("You are %s. Conversation role=%s. Respect backend-enforced authorization and trigger policy.", assistantName, conversationRole)
+func BuildSystemPrompt(conversationRole types.ConversationRole, assistantName, conversationID string) string {
+	return fmt.Sprintf(
+		"You are %s. Conversation role=%s. Execution context: conversation_id=%q. "+
+			"Always review and use this conversation_id as the default context for task operations unless the user explicitly asks for another conversation. "+
+			"Respect backend-enforced authorization and trigger policy.",
+		assistantName,
+		conversationRole,
+		conversationID,
+	)
 }
 
 func BuildMessages(systemPrompt string, history []types.Message, window int, maxContentLen int) []PromptMessage {

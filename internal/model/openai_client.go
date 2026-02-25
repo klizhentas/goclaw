@@ -21,15 +21,25 @@ type OpenAIClient struct {
 	baseURL  string
 	http     *http.Client
 	executor *tools.Executor
+	toolDesc map[string]string
 }
 
-func NewOpenAIClient(apiKey, model, baseURL string, allowedTools []string) *OpenAIClient {
+func NewOpenAIClient(apiKey, model, baseURL string, allowedTools []string, toolDescriptions map[string]string) *OpenAIClient {
+	desc := make(map[string]string, len(toolDescriptions))
+	for k, v := range toolDescriptions {
+		name := strings.TrimSpace(k)
+		if name == "" {
+			continue
+		}
+		desc[name] = strings.TrimSpace(v)
+	}
 	return &OpenAIClient{
 		apiKey:   apiKey,
 		model:    model,
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		http:     &http.Client{},
 		executor: tools.NewExecutor(allowedTools),
+		toolDesc: desc,
 	}
 }
 
@@ -102,7 +112,7 @@ func (c *OpenAIClient) StreamResponse(ctx context.Context, messages []prompt.Pro
 	if c.executor.HasAllowedTools() {
 		conversation = append([]openAIRequestMessage{{
 			Role:    "system",
-			Content: toolUsageSystemPrompt(c.executor.AllowedTools()),
+			Content: toolUsageSystemPrompt(c.executor.AllowedTools(), c.toolDesc),
 		}}, conversation...)
 	}
 
@@ -188,9 +198,21 @@ func (c *OpenAIClient) handleToolCall(ctx context.Context, toolCall openAIToolCa
 		encoded, _ := json.Marshal(resultPayload)
 		return string(encoded)
 	}
-	slog.Info("tool execution completed", "stage", "model_stream", "requested_tool", args.Tool, "return_code", execResult.ReturnCode)
+	if execResult.ReturnCode != 0 {
+		slog.Warn(
+			"tool execution returned non-zero",
+			"stage", "model_stream",
+			"requested_tool", args.Tool,
+			"return_code", execResult.ReturnCode,
+			"stderr", preview(execResult.Stderr),
+			"error", "tool exited non-zero",
+		)
+	} else {
+		slog.Info("tool execution completed", "stage", "model_stream", "requested_tool", args.Tool, "return_code", execResult.ReturnCode)
+	}
 
 	resultPayload["stdout"] = execResult.Stdout
+	resultPayload["stderr"] = execResult.Stderr
 	resultPayload["return_code"] = execResult.ReturnCode
 	encoded, _ := json.Marshal(resultPayload)
 	return string(encoded)
@@ -238,7 +260,7 @@ func execToolDefinition() openAITool {
 		Type: "function",
 		Function: openAIToolDefinition{
 			Name:        "exec_local_tool",
-			Description: "Execute one local allowlisted command and return stdout and return code. Use this for command-like user requests.",
+			Description: "Execute one local allowlisted command and return stdout, stderr, and return code. Use this for command-like user requests.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -405,11 +427,21 @@ func splitArgsFallback(raw string) []string {
 	return fields
 }
 
-func toolUsageSystemPrompt(allowedTools []string) string {
+func toolUsageSystemPrompt(allowedTools []string, descriptions map[string]string) string {
+	toolLines := make([]string, 0, len(allowedTools))
+	for _, tool := range allowedTools {
+		if desc := strings.TrimSpace(descriptions[tool]); desc != "" {
+			toolLines = append(toolLines, fmt.Sprintf("- %s: %s", tool, desc))
+			continue
+		}
+		toolLines = append(toolLines, fmt.Sprintf("- %s", tool))
+	}
+
 	return fmt.Sprintf(
-		"You can execute local commands with the tool `exec_local_tool`. Allowed tools: %s. "+
+		"You can execute local commands with the tool `exec_local_tool`.\n"+
+			"Allowed tools:\n%s\n"+
 			"When the user asks for a local command or explicitly asks to use a tool, call `exec_local_tool` instead of refusing. "+
 			"If execution fails, explain the failure and include key stdout details.",
-		strings.Join(allowedTools, ", "),
+		strings.Join(toolLines, "\n"),
 	)
 }

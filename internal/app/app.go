@@ -65,6 +65,8 @@ func (a *App) Close() error {
 
 func (a *App) Run(ctx context.Context, mode string) error {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "term":
+		return a.RunSender(ctx)
 	case "sender":
 		return a.RunSender(ctx)
 	case "worker":
@@ -74,7 +76,7 @@ func (a *App) Run(ctx context.Context, mode string) error {
 	case "single", "":
 		return a.RunSingle(ctx)
 	default:
-		return trace.BadParameter("unsupported mode %q (use sender|worker|scheduler|single)", mode)
+		return trace.BadParameter("unsupported mode %q (use term|worker|scheduler|single)", mode)
 	}
 }
 
@@ -284,7 +286,7 @@ func (a *App) processQueuedMessage(ctx context.Context, item types.QueueMessage)
 
 	promptStart := time.Now()
 	a.logger.Info("stage start", "conversation_id", item.ConversationID, "message_id", userMsg.ID, "stage", "prompt_build")
-	system := prompt.BuildSystemPrompt(role, a.cfg.AssistantName)
+	system := prompt.BuildSystemPrompt(role, a.cfg.AssistantName, item.ConversationID)
 	built := prompt.BuildMessages(system, messages, a.cfg.HistoryWindow, 4000)
 	a.logger.Info("stage done", "conversation_id", item.ConversationID, "message_id", userMsg.ID, "stage", "prompt_build", "duration_ms", time.Since(promptStart).Milliseconds())
 

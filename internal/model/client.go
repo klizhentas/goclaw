@@ -26,7 +26,7 @@ func NewClient(cfg config.Config) (Client, error) {
 		if cfg.OpenAIAPIKey == "" {
 			return nil, trace.BadParameter("OPENAI_API_KEY is required when MODEL_BACKEND=openai")
 		}
-		return NewOpenAIClient(cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.OpenAIBaseURL, cfg.AllowedTools), nil
+		return NewOpenAIClient(cfg.OpenAIAPIKey, cfg.OpenAIModel, cfg.OpenAIBaseURL, cfg.AllowedTools, cfg.ToolDescriptions), nil
 	default:
 		return nil, trace.BadParameter("unsupported MODEL_BACKEND: %s", cfg.ModelBackend)
 	}

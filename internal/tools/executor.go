@@ -13,6 +13,7 @@ import (
 
 type Result struct {
 	Stdout     string `json:"stdout"`
+	Stderr     string `json:"stderr"`
 	ReturnCode int    `json:"return_code"`
 }
 
@@ -62,14 +63,25 @@ func (e *Executor) Execute(ctx context.Context, tool string, args []string) (Res
 
 	err := cmd.Run()
 	if err == nil {
-		return Result{Stdout: limitOutput(stdout.String()), ReturnCode: 0}, nil
+		return Result{
+			Stdout:     limitOutput(stdout.String()),
+			Stderr:     limitOutput(stderr.String()),
+			ReturnCode: 0,
+		}, nil
 	}
 
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return Result{Stdout: limitOutput(stdout.String()), ReturnCode: exitErr.ExitCode()}, nil
+		return Result{
+			Stdout:     limitOutput(stdout.String()),
+			Stderr:     limitOutput(stderr.String()),
+			ReturnCode: exitErr.ExitCode(),
+		}, nil
 	}
 
+	if stderr.Len() > 0 {
+		return Result{}, trace.Wrap(err, "stderr=%s", limitOutput(stderr.String()))
+	}
 	return Result{}, trace.Wrap(err)
 }
 

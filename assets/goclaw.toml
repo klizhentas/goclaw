@@ -1,0 +1,31 @@
+[[allow.tool]]
+name = "echo"
+description = "Print text to stdout. Use for simple output checks and formatting."
+
+[[allow.tool]]
+name = "date"
+description = "Print the current local date and time from the runtime host."
+
+[[allow.tool]]
+name = "curl"
+description = "Perform HTTP requests to external APIs or endpoints and return response content."
+
+[[allow.tool]]
+name = "./build/goclaw"
+description = """
+Invoke local goclaw task-management commands only.
+Use this tool only for `tasks` operations.
+
+Routing guidance:
+- For normal command-style requests, prefer direct tools (`echo`, `date`, `curl`) instead of `./build/goclaw`.
+- Do not use `./build/goclaw` for `echo`, `date`, or `curl` commands.
+- Use `./build/goclaw` only when creating/listing/removing/updating scheduled tasks.
+
+Examples:
+- ./build/goclaw tasks create --conversation <id> --payload "<text>" [--at RFC3339] [--every 10m]
+- ./build/goclaw tasks ls [--conversation <id>]
+- ./build/goclaw tasks rm --id <task_id>
+- ./build/goclaw tasks update --run-id <id> --caller-id <id> --status success|failed [--result "..."] [--error "..."] [--assistant-message-id <id>]
+
+Do not call `./build/goclaw create` directly.
+"""

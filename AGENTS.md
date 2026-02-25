@@ -26,7 +26,7 @@ make test-race
 ```
 2. Run services via `Makefile` targets:
 ```bash
-make run-sender
+make run-term
 make run-worker
 make run-scheduler
 ```

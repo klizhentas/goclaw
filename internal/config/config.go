@@ -35,11 +35,17 @@ type Config struct {
 	OpenAIBaseURL          string
 	PolicyPath             string
 	AllowedTools           []string
+	ToolDescriptions       map[string]string
+}
+
+type policyTool struct {
+	Name        string `toml:"name"`
+	Description string `toml:"description"`
 }
 
 type policyFile struct {
 	Allow struct {
-		Tools []string `toml:"tools"`
+		Tool []policyTool `toml:"tool"`
 	} `toml:"allow"`
 }
 
@@ -69,11 +75,12 @@ func Load() (Config, error) {
 		PolicyPath:             envOrDefault("POLICY_PATH", "./data/goclaw.toml"),
 	}
 
-	allowedTools, err := loadAllowedTools(cfg.PolicyPath)
+	allowedTools, toolDescriptions, err := loadAllowedTools(cfg.PolicyPath)
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.AllowedTools = allowedTools
+	cfg.ToolDescriptions = toolDescriptions
 
 	if cfg.MaxActiveConversations < 1 {
 		return Config{}, trace.BadParameter("MAX_ACTIVE_CONVERSATIONS must be >= 1")
@@ -97,28 +104,38 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-func loadAllowedTools(path string) ([]string, error) {
+func loadAllowedTools(path string) ([]string, map[string]string, error) {
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, trace.Wrap(err)
+		return nil, nil, trace.Wrap(err)
 	}
 
 	var policy policyFile
 	if _, err := toml.DecodeFile(path, &policy); err != nil {
-		return nil, trace.Wrap(err)
+		return nil, nil, trace.Wrap(err)
 	}
 
-	tools := make([]string, 0, len(policy.Allow.Tools))
-	for _, tool := range policy.Allow.Tools {
-		name := strings.TrimSpace(tool)
+	seen := make(map[string]struct{})
+	tools := make([]string, 0, len(policy.Allow.Tool))
+	descriptions := make(map[string]string, len(policy.Allow.Tool))
+
+	for _, tool := range policy.Allow.Tool {
+		name := strings.TrimSpace(tool.Name)
 		if name == "" {
 			continue
 		}
-		tools = append(tools, name)
+		if _, ok := seen[name]; !ok {
+			seen[name] = struct{}{}
+			tools = append(tools, name)
+		}
+		if desc := strings.TrimSpace(tool.Description); desc != "" {
+			descriptions[name] = desc
+		}
 	}
-	return tools, nil
+
+	return tools, descriptions, nil
 }
 
 func envOrDefault(key, fallback string) string {
