@@ -68,10 +68,12 @@ func (a *App) Run(ctx context.Context, mode string) error {
 		return a.RunSender(ctx)
 	case "worker":
 		return a.RunWorker(ctx)
+	case "scheduler":
+		return a.RunScheduler(ctx)
 	case "single", "":
 		return a.RunSingle(ctx)
 	default:
-		return fmt.Errorf("unsupported mode %q (use sender|worker|single)", mode)
+		return fmt.Errorf("unsupported mode %q (use sender|worker|scheduler|single)", mode)
 	}
 }
 
@@ -146,6 +148,49 @@ func (a *App) RunWorker(ctx context.Context) error {
 	}
 }
 
+func (a *App) RunScheduler(ctx context.Context) error {
+	ticker := time.NewTicker(a.cfg.QueuePollInterval)
+	defer ticker.Stop()
+
+	schedulerSem := make(chan struct{}, a.cfg.SchedulerConcurrency)
+	var wg sync.WaitGroup
+
+	for {
+		select {
+		case <-ctx.Done():
+			wg.Wait()
+			return nil
+		case <-ticker.C:
+		}
+
+		select {
+		case schedulerSem <- struct{}{}:
+		default:
+			continue
+		}
+
+		task, err := a.store.ClaimDueTask(ctx, a.cfg.SchedulerID, a.cfg.TaskLeaseDuration)
+		if err != nil {
+			<-schedulerSem
+			a.logger.Error("claim due task", "conversation_id", "", "message_id", "", "stage", "ingress", "error", err)
+			continue
+		}
+		if task == nil {
+			<-schedulerSem
+			continue
+		}
+
+		wg.Add(1)
+		go func(t types.Task) {
+			defer wg.Done()
+			defer func() { <-schedulerSem }()
+			if err := a.dispatchTaskRun(ctx, t); err != nil {
+				a.logger.Error("dispatch task run failed", "conversation_id", t.ConversationID, "message_id", t.ID, "stage", "persist_in", "error", err)
+			}
+		}(*task)
+	}
+}
+
 func (a *App) runModelStartupDiagnostics(ctx context.Context) {
 	diag, ok := a.model.(model.DiagnosticClient)
 	if !ok {
@@ -206,6 +251,9 @@ func (a *App) processQueuedMessage(ctx context.Context, item types.QueueMessage)
 	}
 	if !policy.ShouldProcess(a.cfg, item.ConversationID, item.Content) {
 		a.logger.Info("message skipped by trigger policy", "conversation_id", item.ConversationID, "message_id", item.ID, "stage", "ingress")
+		if item.RelatedMessageID != "" {
+			_ = a.store.CompleteTaskRunFailure(ctx, item.RelatedMessageID, "message skipped by trigger policy")
+		}
 		return a.store.MarkQueueDone(ctx, item.ID)
 	}
 
@@ -213,12 +261,14 @@ func (a *App) processQueuedMessage(ctx context.Context, item types.QueueMessage)
 	a.logger.Info("stage start", "conversation_id", item.ConversationID, "message_id", item.ID, "stage", "persist_in")
 	if err := a.store.CreateConversationIfMissing(ctx, item.ConversationID, role); err != nil {
 		a.markQueueError(ctx, item.ID, err)
+		a.failLinkedTaskRun(ctx, item.RelatedMessageID, err)
 		a.logger.Error("stage error", "conversation_id", item.ConversationID, "message_id", item.ID, "stage", "persist_in", "duration_ms", time.Since(persistInStart).Milliseconds(), "error", err)
 		return err
 	}
 	userMsg, err := a.store.AppendMessage(ctx, item.ConversationID, types.MessageRoleUser, item.Content)
 	if err != nil {
 		a.markQueueError(ctx, item.ID, err)
+		a.failLinkedTaskRun(ctx, item.RelatedMessageID, err)
 		a.logger.Error("stage error", "conversation_id", item.ConversationID, "message_id", item.ID, "stage", "persist_in", "duration_ms", time.Since(persistInStart).Milliseconds(), "error", err)
 		return err
 	}
@@ -227,6 +277,7 @@ func (a *App) processQueuedMessage(ctx context.Context, item types.QueueMessage)
 	messages, err := a.store.GetRecentMessages(ctx, item.ConversationID, a.cfg.HistoryWindow)
 	if err != nil {
 		a.markQueueError(ctx, item.ID, err)
+		a.failLinkedTaskRun(ctx, item.RelatedMessageID, err)
 		return err
 	}
 
@@ -248,6 +299,7 @@ func (a *App) processQueuedMessage(ctx context.Context, item types.QueueMessage)
 	})
 	if err != nil {
 		a.markQueueError(ctx, item.ID, err)
+		a.failLinkedTaskRun(ctx, item.RelatedMessageID, err)
 		a.logger.Error("stage error", "conversation_id", item.ConversationID, "message_id", userMsg.ID, "stage", "model_stream", "duration_ms", time.Since(modelStart).Milliseconds(), "error", err)
 		return fmt.Errorf("model stream: %w", err)
 	}
@@ -261,15 +313,23 @@ func (a *App) processQueuedMessage(ctx context.Context, item types.QueueMessage)
 	assistantMsg, err := a.store.AppendMessage(ctx, item.ConversationID, types.MessageRoleAssistant, response)
 	if err != nil {
 		a.markQueueError(ctx, item.ID, err)
+		a.failLinkedTaskRun(ctx, item.RelatedMessageID, err)
 		a.logger.Error("stage error", "conversation_id", item.ConversationID, "message_id", userMsg.ID, "stage", "persist_out", "duration_ms", time.Since(persistOutStart).Milliseconds(), "error", err)
 		return err
 	}
 	if _, err := a.store.EnqueueOutbound(ctx, item.ConversationID, response, assistantMsg.ID); err != nil {
 		a.markQueueError(ctx, item.ID, err)
+		a.failLinkedTaskRun(ctx, item.RelatedMessageID, err)
 		return err
 	}
 	if err := a.store.MarkQueueDone(ctx, item.ID); err != nil {
+		a.failLinkedTaskRun(ctx, item.RelatedMessageID, err)
 		return err
+	}
+	if item.RelatedMessageID != "" {
+		if err := a.store.CompleteTaskRunSuccess(ctx, item.RelatedMessageID, response, assistantMsg.ID); err != nil {
+			a.logger.Error("complete linked task run success", "conversation_id", item.ConversationID, "message_id", item.RelatedMessageID, "stage", "persist_out", "error", err)
+		}
 	}
 	a.logger.Info("stage done", "conversation_id", item.ConversationID, "message_id", assistantMsg.ID, "stage", "persist_out", "duration_ms", time.Since(persistOutStart).Milliseconds())
 
@@ -319,5 +379,34 @@ func (a *App) runSenderOutboundLoop(ctx context.Context) {
 			continue
 		}
 		a.logger.Info("stage done", "conversation_id", item.ConversationID, "message_id", item.ID, "stage", "egress", "duration_ms", time.Since(egressStart).Milliseconds())
+	}
+}
+
+func (a *App) dispatchTaskRun(ctx context.Context, task types.Task) error {
+	run, err := a.store.CreateTaskRunQueued(ctx, task, a.cfg.SchedulerID)
+	if err != nil {
+		return err
+	}
+	msg, err := a.store.EnqueueInboundForTaskRun(ctx, task.ConversationID, task.Payload, run.ID)
+	if err != nil {
+		_ = a.store.CompleteTaskRunFailure(ctx, run.ID, err.Error())
+		return err
+	}
+	if err := a.store.SetTaskRunInboundQueueMessageID(ctx, run.ID, msg.ID); err != nil {
+		_ = a.store.CompleteTaskRunFailure(ctx, run.ID, err.Error())
+		return err
+	}
+	if err := a.store.ReleaseTaskClaim(ctx, task.ID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *App) failLinkedTaskRun(ctx context.Context, runID string, err error) {
+	if runID == "" {
+		return
+	}
+	if updateErr := a.store.CompleteTaskRunFailure(ctx, runID, err.Error()); updateErr != nil {
+		a.logger.Error("complete linked task run failure", "conversation_id", "", "message_id", runID, "stage", "persist_out", "error", updateErr)
 	}
 }

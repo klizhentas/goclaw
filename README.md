@@ -8,6 +8,7 @@ Minimal Go implementation scaffold for GOCLAW v1.
 
 - `sender`: reads terminal input and enqueues inbound messages into SQLite queue.
 - `worker`: polls SQLite queue, runs model, persists assistant replies, and enqueues outbound queue records.
+- `scheduler`: claims due tasks using SQLite CAS + lease, creates task runs, and routes runs to worker via inbound queue.
 - `single`: local end-to-end in one process (enqueue + process immediately).
 
 Binary is built into `build/miniclaw` by `make build` and run targets.
@@ -87,6 +88,16 @@ Defaults:
 
 - `DATABASE_PATH=./data/goclaw.db`
 - `LOG_PATH=./data/goclaw.log`
+
+## Tasks CLI
+
+```bash
+build/miniclaw tasks create --conversation main --payload "echo hello"
+build/miniclaw tasks create --conversation main --payload "daily check" --every 10m
+build/miniclaw tasks ls
+build/miniclaw tasks rm --id <task_id>
+build/miniclaw tasks update --run-id <run_id> --caller-id scheduler-1 --status success --result \"done\"
+```
 
 ## Test and Format
 

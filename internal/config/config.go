@@ -26,6 +26,9 @@ type Config struct {
 	WorkerID               string
 	SenderID               string
 	QueuePollInterval      time.Duration
+	TaskLeaseDuration      time.Duration
+	SchedulerID            string
+	SchedulerConcurrency   int
 	ModelBackend           string
 	OpenAIAPIKey           string
 	OpenAIModel            string
@@ -56,6 +59,9 @@ func Load() (Config, error) {
 		WorkerID:               envOrDefault("WORKER_ID", "worker-1"),
 		SenderID:               envOrDefault("SENDER_ID", "sender-1"),
 		QueuePollInterval:      time.Duration(envIntOrDefault("QUEUE_POLL_INTERVAL_MS", 500)) * time.Millisecond,
+		TaskLeaseDuration:      time.Duration(envIntOrDefault("TASK_LEASE_SECONDS", 60)) * time.Second,
+		SchedulerID:            envOrDefault("SCHEDULER_ID", "scheduler-1"),
+		SchedulerConcurrency:   envIntOrDefault("SCHEDULER_CONCURRENCY", 2),
 		ModelBackend:           strings.ToLower(envOrDefault("MODEL_BACKEND", "echo")),
 		OpenAIAPIKey:           strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
 		OpenAIModel:            envOrDefault("OPENAI_MODEL", "gpt-4o-mini"),
@@ -80,6 +86,12 @@ func Load() (Config, error) {
 	}
 	if cfg.QueuePollInterval <= 0 {
 		return Config{}, fmt.Errorf("QUEUE_POLL_INTERVAL_MS must be > 0")
+	}
+	if cfg.TaskLeaseDuration <= 0 {
+		return Config{}, fmt.Errorf("TASK_LEASE_SECONDS must be > 0")
+	}
+	if cfg.SchedulerConcurrency < 1 {
+		return Config{}, fmt.Errorf("SCHEDULER_CONCURRENCY must be >= 1")
 	}
 
 	return cfg, nil

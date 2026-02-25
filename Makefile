@@ -3,7 +3,7 @@ MODE ?= single
 BIN_DIR ?= build
 APP_BIN := $(BIN_DIR)/miniclaw
 
-.PHONY: fmt test test-race build run run-sender run-worker clean
+.PHONY: fmt test test-race build run run-sender run-worker run-scheduler clean
 
 fmt:
 	$(GO) fmt ./...
@@ -28,6 +28,9 @@ run-sender: build
 
 run-worker: build
 	$(APP_BIN) -mode worker
+
+run-scheduler: build
+	$(APP_BIN) -mode scheduler
 
 clean:
 	rm -rf $(BIN_DIR)
