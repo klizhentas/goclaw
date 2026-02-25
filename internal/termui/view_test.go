@@ -29,3 +29,20 @@ func TestCycleDebugTabLocked(t *testing.T) {
 		t.Fatalf("expected wrap to runs tab, got %d", u.debugTabIndex)
 	}
 }
+
+func TestParseTasksAction(t *testing.T) {
+	action, usage := parseTasksAction("ls main")
+	if usage != "" || action.Kind != CommandTasksList || action.ConversationID != "main" {
+		t.Fatalf("unexpected ls parse: action=%#v usage=%q", action, usage)
+	}
+
+	action, usage = parseTasksAction("rm --id abc123")
+	if usage != "" || action.Kind != CommandTasksRemove || action.TaskID != "abc123" {
+		t.Fatalf("unexpected rm parse: action=%#v usage=%q", action, usage)
+	}
+
+	action, usage = parseTasksAction("rm-all --all")
+	if usage != "" || action.Kind != CommandTasksRemoveAll || !action.All {
+		t.Fatalf("unexpected rm-all parse: action=%#v usage=%q", action, usage)
+	}
+}

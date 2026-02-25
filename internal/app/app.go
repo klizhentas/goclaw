@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -134,7 +135,7 @@ func (a *App) RunSender(ctx context.Context) error {
 		a.runSenderOutboundLoop(senderCtx, tui)
 	}()
 
-	err := tui.Run(senderCtx, a.enqueueInbound)
+	err := tui.Run(senderCtx, a.enqueueInbound, a.handleSenderCommand)
 	cancel()
 	wg.Wait()
 	if errors.Is(err, context.Canceled) {
@@ -338,6 +339,62 @@ func (a *App) enqueueInbound(ctx context.Context, in listener.InboundMessage) er
 	}
 	a.logger.Info("stage done", "conversation_id", in.ConversationID, "message_id", queued.ID, "stage", "persist_in", "duration_ms", time.Since(persistStart).Milliseconds())
 	return nil
+}
+
+func (a *App) handleSenderCommand(ctx context.Context, cmd termui.CommandAction) (string, error) {
+	switch strings.TrimSpace(cmd.Kind) {
+	case termui.CommandRemoveConversation:
+		conversationID := strings.TrimSpace(cmd.ConversationID)
+		if conversationID == "" {
+			return "", trace.BadParameter("conversation_id is required")
+		}
+		start := time.Now()
+		a.logger.Info("stage start", "conversation_id", conversationID, "message_id", "", "stage", "persist_in")
+		if err := a.store.RemoveConversation(ctx, conversationID); err != nil {
+			a.logger.Error("stage error", "conversation_id", conversationID, "message_id", "", "stage", "persist_in", "duration_ms", time.Since(start).Milliseconds(), "error", err)
+			return "", trace.Wrap(err)
+		}
+		a.logger.Info("stage done", "conversation_id", conversationID, "message_id", "", "stage", "persist_in", "duration_ms", time.Since(start).Milliseconds())
+		return "removed conversation " + conversationID, nil
+	case termui.CommandTasksList:
+		tasks, err := a.store.ListTasks(ctx, strings.TrimSpace(cmd.ConversationID))
+		if err != nil {
+			return "", trace.Wrap(err)
+		}
+		if len(tasks) == 0 {
+			return "tasks: none", nil
+		}
+		lines := make([]string, 0, len(tasks)+1)
+		lines = append(lines, "tasks:")
+		for _, t := range tasks {
+			lines = append(lines, " - "+t.ID+" conv="+t.ConversationID+" status="+string(t.Status)+" next="+t.NextRunAt.Format(time.RFC3339))
+		}
+		return strings.Join(lines, "\n"), nil
+	case termui.CommandTasksRemove:
+		taskID := strings.TrimSpace(cmd.TaskID)
+		if taskID == "" {
+			return "", trace.BadParameter("task_id is required")
+		}
+		if err := a.store.RemoveTask(ctx, taskID); err != nil {
+			return "", trace.Wrap(err)
+		}
+		return "removed task " + taskID, nil
+	case termui.CommandTasksRemoveAll:
+		conversationID := strings.TrimSpace(cmd.ConversationID)
+		if conversationID == "" && !cmd.All {
+			return "", trace.BadParameter("use --all or conversation scope for rm-all")
+		}
+		removed, err := a.store.RemoveTasks(ctx, conversationID)
+		if err != nil {
+			return "", trace.Wrap(err)
+		}
+		if conversationID == "" {
+			return "removed tasks globally: " + strconv.Itoa(removed), nil
+		}
+		return "removed tasks for " + conversationID + ": " + strconv.Itoa(removed), nil
+	default:
+		return "", trace.BadParameter("unsupported sender command %q", cmd.Kind)
+	}
 }
 
 func (a *App) handleImmediate(ctx context.Context, in listener.InboundMessage) error {

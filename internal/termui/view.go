@@ -2,6 +2,7 @@ package termui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -14,6 +15,18 @@ import (
 	"github.com/klizhentas/goclaw/internal/listener"
 	"github.com/rivo/tview"
 )
+
+const CommandRemoveConversation = "remove_conversation"
+const CommandTasksList = "tasks_list"
+const CommandTasksRemove = "tasks_remove"
+const CommandTasksRemoveAll = "tasks_remove_all"
+
+type CommandAction struct {
+	Kind           string
+	ConversationID string
+	TaskID         string
+	All            bool
+}
 
 type UI struct {
 	app    *tview.Application
@@ -119,13 +132,17 @@ func New(defaultConversation, userLabel, assistantLabel string, debugProvider fu
 	return u
 }
 
-func (u *UI) Run(ctx context.Context, onMessage func(context.Context, listener.InboundMessage) error) error {
+func (u *UI) Run(
+	ctx context.Context,
+	onMessage func(context.Context, listener.InboundMessage) error,
+	onCommand func(context.Context, CommandAction) (string, error),
+) error {
 	slog.Info("termui run start", "stage", "ingress")
 	u.input.SetDoneFunc(func(key tcell.Key) {
 		switch key {
 		case tcell.KeyEnter:
 			slog.Info("termui input enter", "stage", "ingress")
-			u.submitInputWithCallback(ctx, onMessage)
+			u.submitInputWithCallback(ctx, onMessage, onCommand)
 		case tcell.KeyEsc:
 			slog.Info("termui input esc", "stage", "ingress")
 			u.input.SetText("")
@@ -312,10 +329,20 @@ func onOff(v bool) string {
 }
 
 func (u *UI) submitInput() {
-	u.submitInputWithCallback(context.Background(), func(_ context.Context, _ listener.InboundMessage) error { return nil })
+	u.submitInputWithCallback(
+		context.Background(),
+		func(_ context.Context, _ listener.InboundMessage) error { return nil },
+		func(_ context.Context, _ CommandAction) (string, error) {
+			return "", errors.New("command handling unavailable")
+		},
+	)
 }
 
-func (u *UI) submitInputWithCallback(ctx context.Context, onMessage func(context.Context, listener.InboundMessage) error) {
+func (u *UI) submitInputWithCallback(
+	ctx context.Context,
+	onMessage func(context.Context, listener.InboundMessage) error,
+	onCommand func(context.Context, CommandAction) (string, error),
+) {
 	raw := strings.TrimSpace(u.input.GetText())
 	if raw == "" {
 		slog.Debug("termui submit ignored empty", "stage", "ingress")
@@ -328,7 +355,7 @@ func (u *UI) submitInputWithCallback(ctx context.Context, onMessage func(context
 
 	cmd := parseCommand(raw)
 	if cmd.kind != commandNone {
-		u.handleCommand(cmd)
+		u.handleCommand(ctx, cmd, onCommand)
 		return
 	}
 
@@ -405,7 +432,7 @@ func (u *UI) renderLocked(statusText string) {
 
 	u.status.SetText(
 		"Active: " + active +
-			" | New: /new [id] | Switch: /switch <id> | Rename: /rename <id>" +
+			" | New: /new [id] | Switch: /switch <id> | Rename: /rename <id> | Remove: /remove [id] | Tasks: /tasks ..." +
 			" | Keys: Alt+1..9 switch, Ctrl+n/p cycle, Tab/Shift+Tab cycle, Ctrl+g debug, Enter send, Esc clear, Ctrl+c quit" +
 			" | Last key: " + defaultIfEmpty(u.lastKey, "-") +
 			" | " + statusText +
@@ -519,14 +546,14 @@ func (u *UI) renderDebugTableLocked() {
 	}
 }
 
-func (u *UI) handleCommand(cmd parsedCommand) {
+func (u *UI) handleCommand(ctx context.Context, cmd parsedCommand, onCommand func(context.Context, CommandAction) (string, error)) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
 	switch cmd.kind {
 	case commandHelp:
 		u.input.SetText("")
-		u.renderLocked("commands: /new [conversation], /switch <conversation>, /rename <conversation>, /help, /quit, /exit")
+		u.renderLocked("commands: /new [conversation], /switch <conversation>, /rename <conversation>, /remove [conversation], /tasks <ls|ls-all|ls-conversation|rm|rm-all>, /help, /quit, /exit")
 	case commandQuit:
 		u.input.SetText("")
 		u.renderLocked("exiting...")
@@ -565,8 +592,139 @@ func (u *UI) handleCommand(cmd parsedCommand) {
 			return
 		}
 		u.renderLocked("renamed " + oldID + " to " + cmd.arg)
+	case commandRemove:
+		target := strings.TrimSpace(cmd.arg)
+		if target == "" {
+			target = u.state.activeConversation()
+		}
+		if !u.state.hasConversation(target) {
+			u.input.SetText("")
+			u.renderLocked("conversation " + target + " not found")
+			return
+		}
+		u.input.SetText("")
+		u.renderLocked("removing conversation " + target + "...")
+		go func(conversationID string) {
+			if onCommand == nil {
+				u.setStatus("remove failed: backend command handler unavailable")
+				return
+			}
+			result, err := onCommand(ctx, CommandAction{
+				Kind:           CommandRemoveConversation,
+				ConversationID: conversationID,
+			})
+			if err != nil {
+				u.setStatus("remove failed: " + err.Error())
+				return
+			}
+			u.app.QueueUpdateDraw(func() {
+				u.mu.Lock()
+				defer u.mu.Unlock()
+				removed, active := u.state.removeConversation(conversationID)
+				if !removed {
+					u.renderLocked("conversation " + conversationID + " not found")
+					return
+				}
+				status := "removed conversation " + conversationID + "; active=" + active
+				if strings.TrimSpace(result) != "" {
+					status = result
+				}
+				u.renderLocked(status)
+			})
+		}(target)
+	case commandTasks:
+		u.input.SetText("")
+		action, usageErr := parseTasksAction(strings.TrimSpace(cmd.arg))
+		if usageErr != "" {
+			u.renderLocked(usageErr)
+			return
+		}
+		u.renderLocked("running /tasks ...")
+		go func(a CommandAction) {
+			if onCommand == nil {
+				u.setStatus("tasks failed: backend command handler unavailable")
+				return
+			}
+			result, err := onCommand(ctx, a)
+			if err != nil {
+				u.setStatus("tasks failed: " + err.Error())
+				return
+			}
+			u.app.QueueUpdateDraw(func() {
+				u.mu.Lock()
+				defer u.mu.Unlock()
+				if strings.TrimSpace(result) != "" {
+					u.state.appendAssistantMessage(u.state.activeConversation(), result)
+				}
+				u.renderLocked("tasks command complete")
+			})
+		}(action)
 	default:
 		u.renderLocked("invalid command (try /help)")
+	}
+}
+
+func parseTasksAction(raw string) (CommandAction, string) {
+	if strings.TrimSpace(raw) == "" {
+		return CommandAction{}, "usage: /tasks ls [conversation] | /tasks ls-all | /tasks ls-conversation <id> | /tasks rm <task_id> | /tasks rm-all --all|<conversation>"
+	}
+	parts := strings.Fields(raw)
+	sub := strings.ToLower(strings.TrimSpace(parts[0]))
+	switch sub {
+	case "ls":
+		action := CommandAction{Kind: CommandTasksList}
+		if len(parts) >= 2 {
+			if parts[1] == "--conversation" && len(parts) >= 3 {
+				action.ConversationID = strings.TrimSpace(parts[2])
+			} else {
+				action.ConversationID = strings.TrimSpace(parts[1])
+			}
+		}
+		return action, ""
+	case "ls-all":
+		return CommandAction{Kind: CommandTasksList}, ""
+	case "ls-conversation":
+		if len(parts) < 2 {
+			return CommandAction{}, "usage: /tasks ls-conversation <conversation_id>"
+		}
+		if parts[1] == "--conversation" {
+			if len(parts) < 3 {
+				return CommandAction{}, "usage: /tasks ls-conversation --conversation <conversation_id>"
+			}
+			return CommandAction{Kind: CommandTasksList, ConversationID: strings.TrimSpace(parts[2])}, ""
+		}
+		return CommandAction{Kind: CommandTasksList, ConversationID: strings.TrimSpace(parts[1])}, ""
+	case "rm":
+		if len(parts) < 2 {
+			return CommandAction{}, "usage: /tasks rm <task_id>"
+		}
+		taskID := strings.TrimSpace(parts[1])
+		if parts[1] == "--id" {
+			if len(parts) < 3 {
+				return CommandAction{}, "usage: /tasks rm --id <task_id>"
+			}
+			taskID = strings.TrimSpace(parts[2])
+		}
+		if taskID == "" {
+			return CommandAction{}, "usage: /tasks rm <task_id>"
+		}
+		return CommandAction{Kind: CommandTasksRemove, TaskID: taskID}, ""
+	case "rm-all":
+		if len(parts) < 2 {
+			return CommandAction{}, "usage: /tasks rm-all --all|<conversation_id>|--conversation <conversation_id>"
+		}
+		if parts[1] == "--all" {
+			return CommandAction{Kind: CommandTasksRemoveAll, All: true}, ""
+		}
+		if parts[1] == "--conversation" {
+			if len(parts) < 3 {
+				return CommandAction{}, "usage: /tasks rm-all --conversation <conversation_id>"
+			}
+			return CommandAction{Kind: CommandTasksRemoveAll, ConversationID: strings.TrimSpace(parts[2])}, ""
+		}
+		return CommandAction{Kind: CommandTasksRemoveAll, ConversationID: strings.TrimSpace(parts[1])}, ""
+	default:
+		return CommandAction{}, "unknown /tasks subcommand"
 	}
 }
 

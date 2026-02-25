@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gravitational/trace"
@@ -419,6 +420,94 @@ SET status = ?, updated_at = ?, assigned_scheduler_id = NULL, lease_expires_at =
 WHERE id = ?;
 `, types.TaskStatusDeleted, nowUTC(), taskID)
 	if err != nil {
+		return trace.Wrap(err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) RemoveTasks(ctx context.Context, conversationID string) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, trace.Wrap(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var rows *sql.Rows
+	if strings.TrimSpace(conversationID) == "" {
+		rows, err = tx.QueryContext(ctx, `SELECT id FROM tasks WHERE status != ?;`, types.TaskStatusDeleted)
+	} else {
+		rows, err = tx.QueryContext(ctx, `SELECT id FROM tasks WHERE status != ? AND conversation_id = ?;`, types.TaskStatusDeleted, conversationID)
+	}
+	if err != nil {
+		return 0, trace.Wrap(err)
+	}
+	defer rows.Close()
+
+	taskIDs := make([]string, 0, 16)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, trace.Wrap(err)
+		}
+		taskIDs = append(taskIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, trace.Wrap(err)
+	}
+
+	if len(taskIDs) == 0 {
+		if err := tx.Commit(); err != nil {
+			return 0, trace.Wrap(err)
+		}
+		return 0, nil
+	}
+
+	deletedAt := nowUTC()
+	for _, taskID := range taskIDs {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE tasks
+SET status = ?, updated_at = ?, assigned_scheduler_id = NULL, lease_expires_at = NULL
+WHERE id = ?;
+`, types.TaskStatusDeleted, deletedAt, taskID); err != nil {
+			return 0, trace.Wrap(err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, trace.Wrap(err)
+	}
+	return len(taskIDs), nil
+}
+
+func (s *SQLiteStore) RemoveConversation(ctx context.Context, conversationID string) error {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return trace.BadParameter("conversation_id is required")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM task_runs WHERE conversation_id = ?;`, conversationID); err != nil {
+		return trace.Wrap(err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE conversation_id = ?;`, conversationID); err != nil {
+		return trace.Wrap(err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM queue_messages WHERE conversation_id = ?;`, conversationID); err != nil {
+		return trace.Wrap(err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id = ?;`, conversationID); err != nil {
+		return trace.Wrap(err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM conversations WHERE id = ?;`, conversationID); err != nil {
+		return trace.Wrap(err)
+	}
+
+	if err := tx.Commit(); err != nil {
 		return trace.Wrap(err)
 	}
 	return nil

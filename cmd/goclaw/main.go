@@ -46,11 +46,14 @@ type SchedulerCmd struct{}
 type SingleCmd struct{}
 
 type TasksCmd struct {
-	Create TasksCreateCmd `cmd:"" help:"Create one-shot or recurring task."`
-	Ls     TasksLsCmd     `cmd:"" help:"List tasks." aliases:"list"`
-	Rm     TasksRmCmd     `cmd:"" help:"Soft-delete a task." aliases:"remove,delete"`
-	Status TasksStatusCmd `cmd:"" help:"Show scheduler/task/queue diagnostics in table format."`
-	Update TasksUpdateCmd `cmd:"" help:"Update a task run status (authorized backend path)."`
+	Create         TasksCreateCmd         `cmd:"" help:"Create one-shot or recurring task."`
+	Ls             TasksLsCmd             `cmd:"" help:"List tasks (optionally by conversation)." aliases:"list"`
+	LsAll          TasksLsAllCmd          `cmd:"" help:"List all tasks globally."`
+	LsConversation TasksLsConversationCmd `cmd:"" help:"List tasks for one conversation." aliases:"ls-conversation"`
+	Rm             TasksRmCmd             `cmd:"" help:"Soft-delete a task by ID." aliases:"remove,delete"`
+	RmAll          TasksRmAllCmd          `cmd:"" help:"Soft-delete tasks globally or for one conversation." aliases:"remove-all,delete-all"`
+	Status         TasksStatusCmd         `cmd:"" help:"Show scheduler/task/queue diagnostics in table format."`
+	Update         TasksUpdateCmd         `cmd:"" help:"Update a task run status (authorized backend path)."`
 }
 
 type TasksCreateCmd struct {
@@ -64,8 +67,19 @@ type TasksLsCmd struct {
 	Conversation string `name:"conversation" help:"Optional conversation ID filter."`
 }
 
+type TasksLsAllCmd struct{}
+
+type TasksLsConversationCmd struct {
+	Conversation string `name:"conversation" required:"" help:"Conversation ID filter."`
+}
+
 type TasksRmCmd struct {
 	ID string `name:"id" required:"" help:"Task ID."`
+}
+
+type TasksRmAllCmd struct {
+	Conversation string `name:"conversation" help:"Optional conversation ID filter for bulk removal."`
+	All          bool   `name:"all" help:"Remove all tasks globally when no conversation filter is provided."`
 }
 
 type TasksStatusCmd struct {
@@ -211,11 +225,35 @@ func (c *TasksLsCmd) Run(globals *Globals) error {
 	if err != nil {
 		return trace.Wrap(err)
 	}
-	for _, t := range tasks {
-		fmt.Printf("id=%s conversation_id=%s status=%s next_run_at=%s schedule=%s interval_sec=%d failures=%d\n",
-			t.ID, t.ConversationID, t.Status, t.NextRunAt.Format(time.RFC3339), t.ScheduleType, t.IntervalSec, t.FailureCount)
+	return printTasks(tasks)
+}
+
+func (c *TasksLsAllCmd) Run(globals *Globals) error {
+	st, err := store.NewSQLiteStore(globals.cfg.DatabasePath)
+	if err != nil {
+		return trace.Wrap(err)
 	}
-	return nil
+	defer st.Close()
+
+	tasks, err := st.ListTasks(context.Background(), "")
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return printTasks(tasks)
+}
+
+func (c *TasksLsConversationCmd) Run(globals *Globals) error {
+	st, err := store.NewSQLiteStore(globals.cfg.DatabasePath)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	defer st.Close()
+
+	tasks, err := st.ListTasks(context.Background(), c.Conversation)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	return printTasks(tasks)
 }
 
 func (c *TasksRmCmd) Run(globals *Globals) error {
@@ -229,6 +267,29 @@ func (c *TasksRmCmd) Run(globals *Globals) error {
 		return trace.Wrap(err)
 	}
 	fmt.Printf("removed task id=%s\n", c.ID)
+	return nil
+}
+
+func (c *TasksRmAllCmd) Run(globals *Globals) error {
+	st, err := store.NewSQLiteStore(globals.cfg.DatabasePath)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	defer st.Close()
+
+	conversation := strings.TrimSpace(c.Conversation)
+	if conversation == "" && !c.All {
+		return trace.BadParameter("use --all to remove all tasks globally, or pass --conversation")
+	}
+	removed, err := st.RemoveTasks(context.Background(), conversation)
+	if err != nil {
+		return trace.Wrap(err)
+	}
+	if conversation == "" {
+		fmt.Printf("removed %d tasks globally\n", removed)
+		return nil
+	}
+	fmt.Printf("removed %d tasks for conversation=%s\n", removed, conversation)
 	return nil
 }
 
@@ -345,6 +406,14 @@ func listOrNone(values []string) string {
 		return "none"
 	}
 	return strings.Join(values, ",")
+}
+
+func printTasks(tasks []types.Task) error {
+	for _, t := range tasks {
+		fmt.Printf("id=%s conversation_id=%s status=%s next_run_at=%s schedule=%s interval_sec=%d failures=%d\n",
+			t.ID, t.ConversationID, t.Status, t.NextRunAt.Format(time.RFC3339), t.ScheduleType, t.IntervalSec, t.FailureCount)
+	}
+	return nil
 }
 
 func workerCapacityHint(diag store.TaskDiagnostics) string {

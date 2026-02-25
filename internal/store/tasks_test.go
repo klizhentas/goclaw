@@ -91,3 +91,52 @@ func TestTasks_RunUpdateAuthorizationAndBackoff(t *testing.T) {
 		t.Fatalf("expected next_run_at in future, got %s", list[0].NextRunAt)
 	}
 }
+
+func TestTasks_RemoveTasksScopedAndGlobal(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "task_remove.db")
+	st, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	defer st.Close()
+
+	if _, err := st.CreateTask(ctx, "conv-a", "one", nil, 0); err != nil {
+		t.Fatalf("create task conv-a: %v", err)
+	}
+	if _, err := st.CreateTask(ctx, "conv-b", "two", nil, 0); err != nil {
+		t.Fatalf("create task conv-b: %v", err)
+	}
+
+	removed, err := st.RemoveTasks(ctx, "conv-a")
+	if err != nil {
+		t.Fatalf("remove tasks conv-a: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected 1 removed task for conv-a, got %d", removed)
+	}
+
+	listA, err := st.ListTasks(ctx, "conv-a")
+	if err != nil {
+		t.Fatalf("list conv-a: %v", err)
+	}
+	if len(listA) != 0 {
+		t.Fatalf("expected 0 tasks for conv-a, got %d", len(listA))
+	}
+
+	removed, err = st.RemoveTasks(ctx, "")
+	if err != nil {
+		t.Fatalf("remove all tasks: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected 1 removed task globally, got %d", removed)
+	}
+
+	all, err := st.ListTasks(ctx, "")
+	if err != nil {
+		t.Fatalf("list all tasks: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("expected 0 tasks after global remove, got %d", len(all))
+	}
+}

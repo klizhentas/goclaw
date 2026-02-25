@@ -71,6 +71,8 @@ Behavior:
 - Supports explicit conversation commands in input:
   - `/new <conversation_id>`
   - `/switch <conversation_id>`
+  - `/rename <conversation_id>`
+  - `/remove [conversation_id]`
   - `/help`
 - Supports a debug dashboard toggle via `Ctrl+g`.
 - Status panel shows last keypress and runtime hints.
@@ -84,6 +86,8 @@ Input format:
 /new [conversation_id]        # create/select conversation (auto: default-<n> if omitted)
 /switch <conversation_id>     # switch to existing conversation
 /rename <conversation_id>     # rename current conversation
+/remove [conversation_id]     # remove current or named conversation (and its tasks)
+/tasks ...                    # manage tasks from term (ls/rm/rm-all)
 /help                         # list command hints
 /quit or /exit                # exit terminal UI
 ```
@@ -137,7 +141,7 @@ Behavior:
 ## `tasks` Command Reference
 
 ```bash
-build/goclaw tasks <create|ls|rm|status|update> [flags]
+build/goclaw tasks <create|ls|ls-all|ls-conversation|rm|rm-all|status|update> [flags]
 ```
 
 ### `tasks create`
@@ -190,6 +194,34 @@ build/goclaw tasks rm --id <task_id>
 Flags:
 
 - `--id` required: task id
+
+### `tasks ls-all`
+
+```bash
+build/goclaw tasks ls-all
+```
+
+Lists all tasks globally.
+
+### `tasks ls-conversation`
+
+```bash
+build/goclaw tasks ls-conversation --conversation <conversation_id>
+```
+
+Lists tasks for one conversation.
+
+### `tasks rm-all`
+
+```bash
+build/goclaw tasks rm-all --all
+build/goclaw tasks rm-all --conversation <conversation_id>
+```
+
+Removes tasks in bulk:
+
+- `--all`: remove all tasks globally
+- `--conversation`: remove all tasks for a conversation
 
 ### `tasks status`
 

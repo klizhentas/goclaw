@@ -153,6 +153,45 @@ func (s *conversationState) renameActiveConversation(newID string) (string, erro
 	return oldID, nil
 }
 
+func (s *conversationState) removeConversation(id string) (removed bool, active string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false, s.activeConversation()
+	}
+	idx := -1
+	for i, existing := range s.conversations {
+		if existing == id {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return false, s.activeConversation()
+	}
+
+	delete(s.messages, id)
+	delete(s.unread, id)
+	s.conversations = append(s.conversations[:idx], s.conversations[idx+1:]...)
+
+	if len(s.conversations) == 0 {
+		fallback := s.nextDefaultConversationID()
+		s.conversations = []string{fallback}
+		s.messages[fallback] = nil
+		s.activeIndex = 0
+		s.unread[fallback] = 0
+		return true, fallback
+	}
+	if s.activeIndex >= len(s.conversations) {
+		s.activeIndex = len(s.conversations) - 1
+	}
+	if s.activeIndex < 0 {
+		s.activeIndex = 0
+	}
+	active = s.conversations[s.activeIndex]
+	s.unread[active] = 0
+	return true, active
+}
+
 func (s *conversationState) nextDefaultConversationID() string {
 	for i := 1; ; i++ {
 		candidate := "default-" + strconv.Itoa(i)
@@ -169,6 +208,8 @@ const (
 	commandNew
 	commandSwitch
 	commandRename
+	commandRemove
+	commandTasks
 	commandHelp
 	commandQuit
 	commandInvalid
@@ -209,6 +250,17 @@ func parseCommand(raw string) parsedCommand {
 			return parsedCommand{kind: commandInvalid}
 		}
 		return parsedCommand{kind: commandRename, arg: strings.TrimSpace(parts[1])}
+	case "/remove":
+		if len(parts) == 1 {
+			return parsedCommand{kind: commandRemove}
+		}
+		if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
+			return parsedCommand{kind: commandInvalid}
+		}
+		return parsedCommand{kind: commandRemove, arg: strings.TrimSpace(parts[1])}
+	case "/tasks":
+		tail := strings.TrimSpace(strings.TrimPrefix(line, "/tasks"))
+		return parsedCommand{kind: commandTasks, arg: tail}
 	case "/help":
 		return parsedCommand{kind: commandHelp}
 	case "/quit", "/exit":

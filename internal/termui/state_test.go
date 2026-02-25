@@ -25,6 +25,18 @@ func TestParseCommand(t *testing.T) {
 	if cmd.kind != commandRename || cmd.arg != "room-3" {
 		t.Fatalf("unexpected /rename parse: %#v", cmd)
 	}
+	cmd = parseCommand("/remove room-4")
+	if cmd.kind != commandRemove || cmd.arg != "room-4" {
+		t.Fatalf("unexpected /remove parse: %#v", cmd)
+	}
+	cmd = parseCommand("/remove")
+	if cmd.kind != commandRemove || cmd.arg != "" {
+		t.Fatalf("unexpected /remove parse without arg: %#v", cmd)
+	}
+	cmd = parseCommand("/tasks ls")
+	if cmd.kind != commandTasks || cmd.arg != "ls" {
+		t.Fatalf("unexpected /tasks parse: %#v", cmd)
+	}
 
 	cmd = parseCommand("/help")
 	if cmd.kind != commandHelp {
@@ -47,6 +59,10 @@ func TestParseCommand(t *testing.T) {
 	cmd = parseCommand("/rename")
 	if cmd.kind != commandInvalid {
 		t.Fatalf("expected commandInvalid for /rename without args, got %#v", cmd)
+	}
+	cmd = parseCommand("/remove room-1 extra")
+	if cmd.kind != commandInvalid {
+		t.Fatalf("expected commandInvalid for /remove with too many args, got %#v", cmd)
 	}
 }
 
@@ -127,6 +143,23 @@ func TestRenameActiveConversation(t *testing.T) {
 	}
 	if s.unread["ops"] != 2 {
 		t.Fatalf("expected unread to move to new ID, got %d", s.unread["ops"])
+	}
+}
+
+func TestRemoveConversation(t *testing.T) {
+	s := newConversationState("main", "you", "goclaw")
+	s.ensureConversation("room-1")
+	s.ensureConversation("room-2")
+	s.switchToIndex(s.ensureConversation("room-1"))
+	removed, active := s.removeConversation("room-1")
+	if !removed {
+		t.Fatal("expected room-1 to be removed")
+	}
+	if active == "room-1" {
+		t.Fatalf("expected active conversation to switch, got %q", active)
+	}
+	if s.hasConversation("room-1") {
+		t.Fatal("expected room-1 to be absent after removal")
 	}
 }
 
