@@ -12,3 +12,4 @@ This folder is the canonical design source for goclaw.
 - `0000-core-v1.md` - Core system design (v1 baseline)
 - `0001-task-scheduler.md` - Scheduled task execution (SQLite + queue)
 - `0002-repo-guidelines.md` - Repository standards and development guidelines
+- `0003-term-tview-ui.md` - In-place `term` terminal UI upgrade with `tview`
