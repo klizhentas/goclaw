@@ -60,24 +60,37 @@ Starts terminal sender mode.
 
 Behavior:
 
-- Reads stdin lines as inbound messages.
+- Opens a `tview` terminal UI with:
+  - vertical conversation tabs on the left
+  - message window on the right
+  - input field at the bottom
 - Enqueues inbound messages to SQLite queue.
 - Polls outbound queue and prints assistant responses.
+- Updates active conversation in-place when responses arrive.
 
 Input format:
 
 ```text
+<message>
+or
 <conversation_id>: <message>
 ```
 
 Example:
 
 ```text
-main: hello
+hello
 room-1: @Andy summarize this
 ```
 
-Type `exit` to quit.
+Shortcuts:
+
+- `Alt+1..9`: switch conversation by index
+- `Ctrl+n` / `Ctrl+p`: next/previous conversation
+- `Tab` / `Shift+Tab`: cycle conversations
+- `Enter`: send
+- `Esc`: clear input
+- `Ctrl+c`: quit
 
 ### `worker`
 

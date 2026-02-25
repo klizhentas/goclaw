@@ -146,16 +146,16 @@ GROUP BY status;
 		return QueueDirectionStatus{}, trace.Wrap(err)
 	}
 
-	var oldest sql.NullTime
+	var oldestEpoch sql.NullInt64
 	if err := s.db.QueryRowContext(ctx, `
-SELECT MIN(created_at)
+SELECT MIN(unixepoch(created_at))
 FROM queue_messages
 WHERE direction = ? AND status = ?;
-`, direction, types.QueueStatusPending).Scan(&oldest); err != nil {
+`, direction, types.QueueStatusPending).Scan(&oldestEpoch); err != nil {
 		return QueueDirectionStatus{}, trace.Wrap(err)
 	}
-	if oldest.Valid {
-		t := oldest.Time.UTC()
+	if oldestEpoch.Valid {
+		t := time.Unix(oldestEpoch.Int64, 0).UTC()
 		status.OldestPendingAt = &t
 		status.OldestPendingAgeS = int(now.Sub(t).Seconds())
 	}

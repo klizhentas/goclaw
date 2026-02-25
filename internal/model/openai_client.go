@@ -248,7 +248,7 @@ func (c *OpenAIClient) chatCompletion(ctx context.Context, reqPayload openAIRequ
 	}
 	if resp.StatusCode >= 300 {
 		if parsed.Error != nil && parsed.Error.Message != "" {
-			return openAIResponse{}, resp.Status, trace.AccessDenied(parsed.Error.Message)
+			return openAIResponse{}, resp.Status, trace.AccessDenied("%s", parsed.Error.Message)
 		}
 		return openAIResponse{}, resp.Status, trace.AccessDenied("openai http status: %s", resp.Status)
 	}
@@ -311,7 +311,7 @@ func (c *OpenAIClient) StartupCheck(ctx context.Context) (map[string]any, error)
 		if parsed.Error != nil {
 			info["error_type"] = parsed.Error.Type
 			info["error_code"] = parsed.Error.Code
-			return info, trace.AccessDenied(parsed.Error.Message)
+			return info, trace.AccessDenied("%s", parsed.Error.Message)
 		}
 		return info, trace.AccessDenied("openai diagnostics http status: %s", resp.Status)
 	}

@@ -16,6 +16,7 @@ Implement goclaw with a strict minimal-first approach: small, correct, locally t
 3. Use structured logging with `log/slog` in core paths.
 4. Do not log secrets (API keys, auth headers, tokens).
 5. Prefer incremental PR-sized changes over rewrites.
+6. Use a clean `defer`-based release model for locks/resources; avoid scattered inline unlock/release paths.
 
 ## Repo Workflow (Required)
 1. Format and test via `Makefile` targets:

@@ -18,9 +18,20 @@ import (
 	"github.com/klizhentas/goclaw/internal/policy"
 	"github.com/klizhentas/goclaw/internal/prompt"
 	"github.com/klizhentas/goclaw/internal/store"
+	"github.com/klizhentas/goclaw/internal/termui"
 	"github.com/klizhentas/goclaw/internal/types"
 	"github.com/klizhentas/goclaw/pkg/storage"
 )
+
+type inboundRunner interface {
+	Run(ctx context.Context, onMessage func(context.Context, listener.InboundMessage) error) error
+}
+
+type outboundWriter interface {
+	Start(conversationID string)
+	Token(token string)
+	End()
+}
 
 type App struct {
 	cfg      config.Config
@@ -29,8 +40,8 @@ type App struct {
 	locks    *conversation.LockMap
 	sem      chan struct{}
 	model    model.Client
-	listener *listener.CLIListener
-	outbound *outbound.CLIOutbound
+	listener inboundRunner
+	outbound outboundWriter
 }
 
 func New(cfg config.Config, logger *slog.Logger) (*App, error) {
@@ -89,6 +100,25 @@ func (a *App) RunSingle(ctx context.Context) error {
 }
 
 func (a *App) RunSender(ctx context.Context) error {
+	info := termui.DetectSupport()
+	a.logger.Info(
+		"term ui capability",
+		"conversation_id", "",
+		"message_id", "",
+		"stage", "ingress",
+		"term", info.Term,
+		"stdin_tty", info.StdinTTY,
+		"stdout_tty", info.StdoutTTY,
+		"supported", info.Supported,
+		"reason", info.Reason,
+	)
+
+	if !info.Supported {
+		return trace.BadParameter("term UI unavailable: %s", info.Reason)
+	}
+
+	tui := termui.New(a.cfg.MainConversationID)
+
 	senderCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -96,16 +126,19 @@ func (a *App) RunSender(ctx context.Context) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		a.runSenderOutboundLoop(senderCtx)
+		a.runSenderOutboundLoop(senderCtx, tui)
 	}()
 
-	err := a.listener.Run(senderCtx, a.enqueueInbound)
+	err := tui.Run(senderCtx, a.enqueueInbound)
 	cancel()
 	wg.Wait()
 	if errors.Is(err, context.Canceled) {
 		return nil
 	}
-	return err
+	if err == nil {
+		return nil
+	}
+	return trace.Wrap(err, "term UI exited")
 }
 
 func (a *App) RunWorker(ctx context.Context) error {
@@ -352,7 +385,7 @@ func (a *App) markQueueError(ctx context.Context, queueID string, err error) {
 	}
 }
 
-func (a *App) runSenderOutboundLoop(ctx context.Context) {
+func (a *App) runSenderOutboundLoop(ctx context.Context, out outboundWriter) {
 	ticker := time.NewTicker(a.cfg.QueuePollInterval)
 	defer ticker.Stop()
 
@@ -374,9 +407,9 @@ func (a *App) runSenderOutboundLoop(ctx context.Context) {
 
 		egressStart := time.Now()
 		a.logger.Info("stage start", "conversation_id", item.ConversationID, "message_id", item.ID, "stage", "egress")
-		a.outbound.Start(item.ConversationID)
-		a.outbound.Token(item.Content)
-		a.outbound.End()
+		out.Start(item.ConversationID)
+		out.Token(item.Content)
+		out.End()
 		if err := a.store.MarkQueueDone(ctx, item.ID); err != nil {
 			a.logger.Error("mark outbound done", "conversation_id", item.ConversationID, "message_id", item.ID, "stage", "egress", "error", err)
 			continue

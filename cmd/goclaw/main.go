@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"syscall"
@@ -108,8 +111,10 @@ func main() {
 	logger := mustBuildLogger(cfg)
 	slog.SetDefault(logger)
 	globals := &Globals{cfg: cfg, logger: logger}
+	installDebugSignalHandler(logger)
 
 	if err := ctx.Run(globals); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		logger.Error("command failed", "error", err)
 		os.Exit(1)
 	}
@@ -392,35 +397,64 @@ func runModes(globals *Globals, modes []string) error {
 		mode string
 		err  error
 	}
-	resultCh := make(chan modeResult, len(modes))
-	var wg sync.WaitGroup
+
+	foreground := ""
 	for _, mode := range modes {
+		if mode == "term" {
+			foreground = mode
+			break
+		}
+	}
+
+	background := make([]string, 0, len(modes))
+	for _, mode := range modes {
+		if mode == foreground {
+			continue
+		}
+		background = append(background, mode)
+	}
+
+	resultCh := make(chan modeResult, len(background))
+	var wg sync.WaitGroup
+	for _, mode := range background {
 		mode := mode
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := runModeWithContext(runCtx, globals, mode)
-			resultCh <- modeResult{mode: mode, err: err}
-			cancel()
+			if err := runModeWithContext(runCtx, globals, mode); err != nil {
+				resultCh <- modeResult{mode: mode, err: err}
+				cancel()
+				return
+			}
+			resultCh <- modeResult{mode: mode, err: nil}
 		}()
 	}
 
-	done := make(chan struct{})
+	bgDone := make(chan struct{})
 	go func() {
-		defer close(done)
+		defer close(bgDone)
 		wg.Wait()
 	}()
 
-	select {
-	case result := <-resultCh:
-		<-done
+	var fgErr error
+	if foreground != "" {
+		fgErr = runModeWithContext(runCtx, globals, foreground)
+		cancel()
+		<-bgDone
+		if fgErr != nil {
+			return trace.Wrap(fgErr, "mode=%s", foreground)
+		}
+	} else {
+		<-bgDone
+	}
+
+	close(resultCh)
+	for result := range resultCh {
 		if result.err != nil {
 			return trace.Wrap(result.err, "mode=%s", result.mode)
 		}
-		return nil
-	case <-done:
-		return nil
 	}
+	return nil
 }
 
 func runModeWithContext(ctx context.Context, globals *Globals, mode string) error {
@@ -488,4 +522,30 @@ func mustBuildLogger(cfg config.Config) *slog.Logger {
 		"sender_id", cfg.SenderID,
 		"scheduler_id", cfg.SchedulerID,
 	)
+}
+
+func installDebugSignalHandler(logger *slog.Logger) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGUSR2)
+
+	go func() {
+		for range ch {
+			dump := goroutineDump()
+			_, _ = fmt.Fprintf(os.Stderr, "\n=== SIGUSR2 goroutine dump (pid=%d) ===\n%s\n", os.Getpid(), dump)
+			logger.Error(
+				"received SIGUSR2; goroutine dump",
+				"stage", "ingress",
+				"goroutines", runtime.NumGoroutine(),
+				"stack", dump,
+			)
+		}
+	}()
+}
+
+func goroutineDump() string {
+	var buf bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&buf, 2); err != nil {
+		return fmt.Sprintf("failed to capture goroutine dump: %v", err)
+	}
+	return buf.String()
 }

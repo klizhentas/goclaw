@@ -13,6 +13,12 @@
 - Use `log/slog` for structured logging; prefer text handler locally. Do not call `log.Fatal`/`slog.Error` with exits from libraries—propagate errors and let `main` decide when to `os.Exit(1)`.
 - When adding dependencies, run `go mod tidy` to keep `go.mod`/`go.sum` clean.
 
+## Concurrency and Locking
+- Prefer a clean `defer`-based release model for all locks/semaphores/resources: acquire once, release once in a nearby `defer`.
+- Avoid scattered inline `Unlock()`/release calls across multiple branches; this pattern is error-prone and increases deadlock risk.
+- Keep lock scope explicit and minimal; avoid nested lock acquisition unless strictly required and documented.
+- When using callbacks/events that may re-enter code paths, avoid invoking lock-taking callbacks while holding locks.
+
 ## Testing Guidelines
 - Default to table-driven tests in `*_test.go`. Use Go's `testing` package and `stretchr/testify/require` for assertions where it improves clarity.
 - Run `go test ./... -race` for full checks; `go test ./...` for quick iteration. Add coverage flags when touching critical paths.
