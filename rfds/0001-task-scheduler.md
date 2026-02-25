@@ -4,7 +4,7 @@
 - Authors: goclaw maintainers
 - Created: 2026-02-25
 - Updated: 2026-02-25
-- Tracking: local implementation in `internal/store`, `internal/app`, `cmd/miniclaw`
+- Tracking: local implementation in `internal/store`, `internal/app`, `cmd/goclaw`
 - Related:
   - `rfds/0000-core-v1.md` (baseline core architecture)
 

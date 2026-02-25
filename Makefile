@@ -1,7 +1,7 @@
 GO ?= go
-MODE ?= single
+CMD ?= single
 BIN_DIR ?= build
-APP_BIN := $(BIN_DIR)/miniclaw
+APP_BIN := $(BIN_DIR)/goclaw
 
 .PHONY: fmt vet test test-race build run run-sender run-worker run-scheduler clean
 
@@ -19,21 +19,21 @@ test-race:
 
 build:
 	mkdir -p $(BIN_DIR)
-	$(GO) build -o $(APP_BIN) ./cmd/miniclaw
+	$(GO) build -o $(APP_BIN) ./cmd/goclaw
 
 run:
-	$(APP_BIN) -mode $(MODE)
+	$(APP_BIN) $(CMD)
 
 run: build
 
 run-sender: build
-	$(APP_BIN) -mode sender
+	$(APP_BIN) term
 
 run-worker: build
-	$(APP_BIN) -mode worker
+	$(APP_BIN) worker
 
 run-scheduler: build
-	$(APP_BIN) -mode scheduler
+	$(APP_BIN) scheduler
 
 clean:
 	rm -rf $(BIN_DIR)

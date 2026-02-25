@@ -7,6 +7,8 @@
 
 ## Tooling and Build Basics
 - Format with `gofmt` (or `go fmt ./...`); organize imports with `goimports`. Run `go vet ./...` before sending changes.
+- CLI parsing should use `alecthomas/kong` for structured subcommands, typed flags, and native `--help` behavior.
+- CLI UX should follow `clig.dev` guidance: clear error messages, discoverable commands, focused help per subcommand, and actionable examples.
 - Use `gravitational/trace` for error creation and wrapping (`trace.Wrap`, `trace.BadParameter`, etc.). Avoid bare `fmt.Errorf` unless formatting non-error values.
 - Use `log/slog` for structured logging; prefer text handler locally. Do not call `log.Fatal`/`slog.Error` with exits from libraries—propagate errors and let `main` decide when to `os.Exit(1)`.
 - When adding dependencies, run `go mod tidy` to keep `go.mod`/`go.sum` clean.

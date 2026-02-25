@@ -6,6 +6,8 @@ require modernc.org/sqlite v1.33.1
 
 require github.com/BurntSushi/toml v1.5.0
 
+require github.com/alecthomas/kong v1.12.1
+
 require github.com/gravitational/trace v1.4.0
 
 require (
