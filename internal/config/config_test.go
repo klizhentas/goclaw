@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -84,5 +85,23 @@ assistant_label = "clawbot"
 	}
 	if cfg.UIAssistantLabel != "clawbot" {
 		t.Fatalf("unexpected UIAssistantLabel: %q", cfg.UIAssistantLabel)
+	}
+}
+
+func TestLoad_InvalidTermTheme(t *testing.T) {
+	t.Setenv("TERM_THEME", "sepia")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected TERM_THEME validation error")
+	}
+}
+
+func TestLoad_DefaultLogLevelWarn(t *testing.T) {
+	t.Setenv("LOG_LEVEL", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.LogLevel != slog.LevelWarn {
+		t.Fatalf("expected default log level WARN, got %v", cfg.LogLevel)
 	}
 }

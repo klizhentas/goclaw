@@ -122,6 +122,7 @@ func (a *App) RunSender(ctx context.Context) error {
 		a.cfg.MainConversationID,
 		a.cfg.UIUserLabel,
 		a.cfg.UIAssistantLabel,
+		a.cfg.TermTheme,
 		a.debugSnapshotProvider(),
 	)
 

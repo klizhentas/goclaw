@@ -3,7 +3,7 @@ CMD ?= single
 BIN_DIR ?= build
 APP_BIN := $(BIN_DIR)/goclaw
 
-.PHONY: fmt vet test test-race build run run-term run-worker run-scheduler clean
+.PHONY: fmt vet test test-race build run run-term run-worker run-scheduler sloccount clean
 
 fmt:
 	$(GO) fmt ./...
@@ -34,6 +34,16 @@ run-worker: build
 
 run-scheduler: build
 	$(APP_BIN) run --mode=scheduler
+
+sloccount:
+	@if command -v cloc >/dev/null 2>&1; then \
+		cloc --vcs=git --exclude-dir=build,data,vendor .; \
+	else \
+		echo "cloc not found; using wc -l fallback"; \
+		find . -type f \( -name '*.go' -o -name '*.md' -o -name '*.toml' -o -name 'Makefile' \) \
+			-not -path './.git/*' -not -path './build/*' -not -path './data/*' -not -path './vendor/*' \
+			-print0 | xargs -0 wc -l; \
+	fi
 
 clean:
 	rm -rf $(BIN_DIR)

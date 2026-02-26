@@ -25,6 +25,8 @@ import (
 )
 
 type CLI struct {
+	LogLevel  string       `name:"log-level" help:"Process log level override (debug|info|warn|error)."`
+	Debug     bool         `short:"d" help:"Shortcut for --log-level=debug."`
 	Run       RunCmd       `cmd:"" help:"Run one or more modes concurrently (example: run --mode=term,scheduler)."`
 	Term      TermCmd      `cmd:"" help:"Start terminal mode (enqueue user input, print outbound responses)." aliases:"terminal"`
 	Worker    WorkerCmd    `cmd:"" help:"Start worker mode (claim and process inbound queue messages)."`
@@ -36,9 +38,12 @@ type CLI struct {
 type RunCmd struct {
 	Mode     string `name:"mode" required:"" help:"Comma-separated modes: term,worker,scheduler,single."`
 	WorkerID string `name:"worker-id" help:"Worker identity override (used when mode includes worker). If omitted, worker ID is auto-generated at startup."`
+	Theme    string `name:"theme" help:"Terminal theme override when mode includes term (light|dark)."`
 }
 
-type TermCmd struct{}
+type TermCmd struct {
+	Theme string `name:"theme" default:"light" help:"Terminal theme (light|dark)."`
+}
 type WorkerCmd struct {
 	WorkerID string `name:"worker-id" help:"Worker identity override. If omitted, worker ID is auto-generated at startup."`
 }
@@ -102,19 +107,20 @@ type Globals struct {
 }
 
 func main() {
+	args := os.Args[1:]
+	if len(args) == 0 {
+		_, _ = fmt.Fprintln(os.Stderr, conciseTopLevelHelp())
+		os.Exit(2)
+	}
+
 	var cli CLI
-	parser, err := kong.New(
-		&cli,
-		kong.Name("goclaw"),
-		kong.Description("goclaw assistant runtime CLI"),
-		kong.UsageOnError(),
-	)
+	parser, err := newParser(&cli)
 	if err != nil {
 		slog.Error("build cli parser", "error", err)
 		os.Exit(1)
 	}
 
-	ctx, err := parser.Parse(os.Args[1:])
+	ctx, err := parser.Parse(args)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
@@ -125,7 +131,10 @@ func main() {
 		slog.Error("load config", "error", err)
 		os.Exit(1)
 	}
-	applyCLIWorkerIDOverride(&cfg, &cli)
+	if err := applyCLIOverrides(&cfg, &cli); err != nil {
+		slog.Error("apply cli overrides", "error", err)
+		os.Exit(1)
+	}
 	if strings.TrimSpace(cfg.WorkerID) == "" {
 		cfg.WorkerID = autoWorkerID()
 	}
@@ -139,6 +148,26 @@ func main() {
 		logger.Error("command failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func conciseTopLevelHelp() string {
+	return strings.TrimSpace(`
+goclaw requires a subcommand.
+
+Usage:
+  goclaw <command> [flags]
+
+Common commands:
+  run         Run one or more modes (example: goclaw run --mode=term,scheduler)
+  term        Start terminal mode
+  worker      Start worker mode
+  scheduler   Start scheduler mode
+  single      Start single-process mode
+  tasks       Manage tasks (create, ls, rm, status, update)
+
+Use "goclaw <command> --help" for command details.
+Use "goclaw --help" for full reference.
+`)
 }
 
 func (c *TermCmd) Run(globals *Globals) error {
@@ -165,9 +194,18 @@ func (c *RunCmd) Run(globals *Globals) error {
 	return runModes(globals, modes)
 }
 
-func applyCLIWorkerIDOverride(cfg *config.Config, cli *CLI) {
+func newParser(cli *CLI) (*kong.Kong, error) {
+	return kong.New(
+		cli,
+		kong.Name("goclaw"),
+		kong.Description("goclaw assistant runtime CLI"),
+		kong.UsageOnError(),
+	)
+}
+
+func applyCLIOverrides(cfg *config.Config, cli *CLI) error {
 	if cfg == nil || cli == nil {
-		return
+		return nil
 	}
 	if v := strings.TrimSpace(cli.Run.WorkerID); v != "" {
 		cfg.WorkerID = v
@@ -175,10 +213,57 @@ func applyCLIWorkerIDOverride(cfg *config.Config, cli *CLI) {
 	if v := strings.TrimSpace(cli.Worker.WorkerID); v != "" {
 		cfg.WorkerID = v
 	}
+	if v := strings.ToLower(strings.TrimSpace(cli.Run.Theme)); v != "" {
+		if !isValidTheme(v) {
+			return trace.BadParameter("invalid --theme %q (use light|dark)", cli.Run.Theme)
+		}
+		cfg.TermTheme = v
+	}
+	if v := strings.ToLower(strings.TrimSpace(cli.Term.Theme)); v != "" {
+		if !isValidTheme(v) {
+			return trace.BadParameter("invalid --theme %q (use light|dark)", cli.Term.Theme)
+		}
+		cfg.TermTheme = v
+	}
+	if cli.Debug {
+		cfg.LogLevel = slog.LevelDebug
+	}
+	if strings.TrimSpace(cli.LogLevel) != "" {
+		level, ok := parseCLILogLevel(cli.LogLevel)
+		if !ok {
+			return trace.BadParameter("invalid --log-level %q (use debug|info|warn|error)", cli.LogLevel)
+		}
+		cfg.LogLevel = level
+	}
+	return nil
 }
 
 func autoWorkerID() string {
 	return fmt.Sprintf("worker-%d-%d", os.Getpid(), time.Now().UnixNano()%1_000_000)
+}
+
+func parseCLILogLevel(raw string) (slog.Level, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "debug":
+		return slog.LevelDebug, true
+	case "info":
+		return slog.LevelInfo, true
+	case "warn":
+		return slog.LevelWarn, true
+	case "error":
+		return slog.LevelError, true
+	default:
+		return slog.LevelInfo, false
+	}
+}
+
+func isValidTheme(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "light", "dark":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *TasksCreateCmd) Run(globals *Globals) error {

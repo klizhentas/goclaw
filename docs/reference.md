@@ -10,6 +10,11 @@ The CLI uses `alecthomas/kong` subcommand parsing and supports `--help` at every
 goclaw <subcommand> [flags]
 ```
 
+Global flags:
+
+- `--log-level <debug|info|warn|error>` process log level override
+- `-d` shortcut for debug logs (`--log-level=debug`)
+
 Primary subcommands:
 
 - `run` - run one or more runtime modes in one process (`--mode=term,scheduler`)
@@ -38,13 +43,14 @@ If no subcommand is provided, CLI returns an error with usage guidance.
 Runs one or more modes concurrently.
 
 ```bash
-build/goclaw run --mode=<term|worker|scheduler|single>[,...] [--worker-id <id>]
+build/goclaw run --mode=<term|worker|scheduler|single>[,...] [--worker-id <id>] [--theme <light|dark>]
 ```
 
 Examples:
 
 ```bash
 build/goclaw run --mode=term,scheduler
+build/goclaw run --mode=term,scheduler --theme dark
 build/goclaw run --mode=worker
 build/goclaw run --mode=worker --worker-id worker-2
 build/goclaw run --mode=single
@@ -59,6 +65,10 @@ Notes:
 
 Starts terminal sender mode.
 
+```bash
+build/goclaw term [--theme <light|dark>]
+```
+
 Behavior:
 
 - Opens a `tview` terminal UI with:
@@ -68,6 +78,7 @@ Behavior:
 - Enqueues inbound messages to SQLite queue.
 - Polls outbound queue and prints assistant responses.
 - Updates active conversation in-place when responses arrive.
+- Supports light/dark themes (`--theme`, default `light`).
 - Supports explicit conversation commands in input:
   - `/new <conversation_id>`
   - `/switch <conversation_id>`
@@ -344,6 +355,7 @@ Identity / routing:
 - `WORKER_ID` default auto-generated (`worker-<pid>-<suffix>`)
 - `SENDER_ID` default `sender-1`
 - `SCHEDULER_ID` default `scheduler-1`
+- `TERM_THEME` default `light` (`light` or `dark`)
 
 For multi-worker setups, set a unique `WORKER_ID` per process (for example `worker-1`, `worker-2`), otherwise diagnostics will show them as one worker.
 
@@ -362,7 +374,7 @@ Assistant behavior:
 - `NON_MAIN_NEEDS_TRIGGER` default `true`
 - `MAIN_NEEDS_TRIGGER` default `false`
 - `HISTORY_WINDOW` default `20`
-- `LOG_LEVEL` default `INFO`
+- `LOG_LEVEL` default `WARN`
 - `UI_USER_LABEL` default `you`
 - `UI_ASSISTANT_LABEL` default `goclaw`
 

@@ -52,9 +52,29 @@ type UI struct {
 	flashIndex    int
 	flashUntil    time.Time
 	debugProvider func(context.Context, string) (*DebugSnapshot, error)
+
+	bg        tcell.Color
+	text      tcell.Color
+	mutedText tcell.Color
+	border    tcell.Color
+	accent    tcell.Color
+	warn      tcell.Color
+	selected  tcell.Color
 }
 
-func New(defaultConversation, userLabel, assistantLabel string, debugProvider func(context.Context, string) (*DebugSnapshot, error)) *UI {
+type palette struct {
+	bg        tcell.Color
+	inputBG   tcell.Color
+	text      tcell.Color
+	mutedText tcell.Color
+	border    tcell.Color
+	accent    tcell.Color
+	warn      tcell.Color
+	selected  tcell.Color
+}
+
+func New(defaultConversation, userLabel, assistantLabel, theme string, debugProvider func(context.Context, string) (*DebugSnapshot, error)) *UI {
+	p := paletteForTheme(theme)
 	u := &UI{
 		app:           tview.NewApplication(),
 		state:         newConversationState(defaultConversation, userLabel, assistantLabel),
@@ -62,25 +82,42 @@ func New(defaultConversation, userLabel, assistantLabel string, debugProvider fu
 		flashIndex:    -1,
 		debugTabIndex: 0,
 		debugProvider: debugProvider,
+		bg:            p.bg,
+		text:          p.text,
+		mutedText:     p.mutedText,
+		border:        p.border,
+		accent:        p.accent,
+		warn:          p.warn,
+		selected:      p.selected,
 	}
 
 	u.conversationList = tview.NewList().
 		ShowSecondaryText(false)
 	u.conversationList.SetBorder(true).SetTitle(" Conversations ")
+	u.conversationList.SetMainTextColor(u.text)
+	u.conversationList.SetSecondaryTextColor(u.mutedText)
+	u.conversationList.SetBackgroundColor(u.bg)
+	u.conversationList.SetSelectedBackgroundColor(u.accent)
+	u.conversationList.SetSelectedTextColor(u.selected)
+	u.conversationList.SetMainTextStyle(tcell.StyleDefault.Foreground(u.text).Background(u.bg))
+	u.conversationList.SetSecondaryTextStyle(tcell.StyleDefault.Foreground(u.mutedText).Background(u.bg))
+	u.conversationList.SetSelectedStyle(tcell.StyleDefault.Foreground(u.selected).Background(u.accent))
+	u.conversationList.SetUseStyleTags(false, false)
+	u.conversationList.SetBorderColor(u.border)
+	u.conversationList.SetTitleColor(u.accent)
 	u.conversationList.SetChangedFunc(func(index int, _, _ string, _ rune) {
 		if u.rendering.Load() {
 			return
 		}
 		slog.Info("termui conversation changed", "stage", "egress", "index", index)
-		u.mu.Lock()
-		defer u.mu.Unlock()
-		if u.debugEnabled {
-			u.setDebugTabLocked(index)
-			u.renderLocked("debug section: " + debugSectionName(u.debugTabIndex))
-			return
-		}
-		u.state.switchToIndex(index)
-		u.renderLocked("switched conversation")
+		u.withLockAndRender(func() string {
+			if u.debugEnabled {
+				u.setDebugTabLocked(index)
+				return "debug section: " + debugSectionName(u.debugTabIndex)
+			}
+			u.state.switchToIndex(index)
+			return "switched conversation"
+		})
 	})
 
 	u.messageView = tview.NewTextView().
@@ -88,11 +125,18 @@ func New(defaultConversation, userLabel, assistantLabel string, debugProvider fu
 		SetScrollable(true).
 		SetWordWrap(true)
 	u.messageView.SetBorder(true).SetTitle(" Messages ")
+	u.messageView.SetBackgroundColor(u.bg)
+	u.messageView.SetTextColor(u.text)
+	u.messageView.SetBorderColor(u.border)
+	u.messageView.SetTitleColor(u.accent)
 
 	u.debugTable = tview.NewTable().
 		SetBorders(false).
 		SetSelectable(false, false)
 	u.debugTable.SetBorder(true).SetTitle(" Debug ")
+	u.debugTable.SetBackgroundColor(u.bg)
+	u.debugTable.SetBorderColor(u.border)
+	u.debugTable.SetTitleColor(u.accent)
 
 	u.mainPages = tview.NewPages().
 		AddPage("messages", u.messageView, true, true).
@@ -100,8 +144,18 @@ func New(defaultConversation, userLabel, assistantLabel string, debugProvider fu
 
 	u.input = tview.NewInputField()
 	u.input.SetBorder(true).SetTitle(" Input (message or /new [conversation_id]) ")
+	u.input.SetFieldBackgroundColor(p.inputBG)
+	u.input.SetFieldTextColor(u.text)
+	u.input.SetBackgroundColor(u.bg)
+	u.input.SetLabelColor(u.mutedText)
+	u.input.SetBorderColor(u.border)
+	u.input.SetTitleColor(u.accent)
 
 	u.status.SetBorder(true).SetTitle(" Status / Debug ")
+	u.status.SetBackgroundColor(u.bg)
+	u.status.SetTextColor(u.text)
+	u.status.SetBorderColor(u.border)
+	u.status.SetTitleColor(u.accent)
 
 	right := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(u.mainPages, 0, 1, false).
@@ -111,6 +165,7 @@ func New(defaultConversation, userLabel, assistantLabel string, debugProvider fu
 	u.layout = tview.NewFlex().
 		AddItem(u.conversationList, 28, 0, false).
 		AddItem(right, 0, 1, true)
+	u.layout.SetBackgroundColor(u.bg)
 
 	u.input.SetDoneFunc(func(key tcell.Key) {
 		switch key {
@@ -124,12 +179,37 @@ func New(defaultConversation, userLabel, assistantLabel string, debugProvider fu
 
 	u.app.SetInputCapture(u.captureKeys)
 
-	u.mu.Lock()
-	u.renderLocked("ready")
-	u.mu.Unlock()
+	u.withRenderLock("ready")
 	slog.Info("termui initialized", "stage", "egress", "default_conversation", u.state.activeConversation())
 
 	return u
+}
+
+func paletteForTheme(theme string) palette {
+	switch strings.ToLower(strings.TrimSpace(theme)) {
+	case "dark":
+		return palette{
+			bg:        tcell.ColorBlack,
+			inputBG:   tcell.ColorBlack,
+			text:      tcell.ColorWhite,
+			mutedText: tcell.ColorLightGray,
+			border:    tcell.ColorGray,
+			accent:    tcell.ColorSkyblue,
+			warn:      tcell.ColorOrange,
+			selected:  tcell.ColorWhite,
+		}
+	default:
+		return palette{
+			bg:        tcell.ColorWhite,
+			inputBG:   tcell.ColorLightGray,
+			text:      tcell.ColorBlack,
+			mutedText: tcell.ColorDarkSlateGray,
+			border:    tcell.ColorGray,
+			accent:    tcell.ColorTeal,
+			warn:      tcell.ColorOrange,
+			selected:  tcell.ColorBlack,
+		}
+	}
 }
 
 func (u *UI) Run(
@@ -213,9 +293,7 @@ func (u *UI) End() {
 	slog.Info("termui outbound end", "stage", "egress", "conversation_id", conversationID, "content_len", len(content))
 
 	u.app.QueueUpdateDraw(func() {
-		u.mu.Lock()
-		defer u.mu.Unlock()
-		u.renderLocked("assistant response received")
+		u.withRenderLock("assistant response received")
 	})
 }
 
@@ -230,30 +308,29 @@ func (u *UI) captureKeys(event *tcell.EventKey) *tcell.EventKey {
 
 	if event.Modifiers()&tcell.ModAlt != 0 {
 		if idx, ok := indexFromRune(event.Rune()); ok {
-			u.mu.Lock()
-			defer u.mu.Unlock()
-			prev := u.state.activeIndex
-			if u.state.switchToIndex(idx) {
-				u.triggerFlashLocked(idx)
-				if prev == idx {
-					u.renderLocked(fmt.Sprintf("pressed Alt-%d (already active)", idx+1))
-				} else {
+			u.withLockAndRender(func() string {
+				prev := u.state.activeIndex
+				if u.state.switchToIndex(idx) {
+					u.triggerFlashLocked(idx)
+					if prev == idx {
+						return fmt.Sprintf("pressed Alt-%d (already active)", idx+1)
+					}
 					slog.Info("termui switch alt-number", "stage", "ingress", "index", idx)
-					u.renderLocked(fmt.Sprintf("pressed Alt-%d", idx+1))
+					return fmt.Sprintf("pressed Alt-%d", idx+1)
 				}
-			} else {
-				u.renderLocked(fmt.Sprintf("pressed Alt-%d (no conversation)", idx+1))
-			}
+				return fmt.Sprintf("pressed Alt-%d (no conversation)", idx+1)
+			})
 			return nil
 		}
 	}
 
 	if event.Key() == tcell.KeyCtrlG {
-		u.mu.Lock()
-		u.debugEnabled = !u.debugEnabled
-		enabled := u.debugEnabled
-		u.renderLocked(fmt.Sprintf("debug %s", onOff(enabled)))
-		u.mu.Unlock()
+		enabled := false
+		u.withLockAndRender(func() string {
+			u.debugEnabled = !u.debugEnabled
+			enabled = u.debugEnabled
+			return fmt.Sprintf("debug %s", onOff(enabled))
+		})
 		if enabled {
 			go u.refreshDebug(context.Background())
 		}
@@ -262,28 +339,26 @@ func (u *UI) captureKeys(event *tcell.EventKey) *tcell.EventKey {
 
 	switch event.Key() {
 	case tcell.KeyCtrlN, tcell.KeyTab:
-		u.mu.Lock()
-		defer u.mu.Unlock()
-		if u.debugEnabled {
-			u.cycleDebugTabLocked(1)
-			u.renderLocked("debug section: " + debugSectionName(u.debugTabIndex))
-			return nil
-		}
-		u.state.cycleNext()
-		slog.Info("termui cycle next", "stage", "ingress", "active", u.state.activeConversation())
-		u.renderLocked("switched conversation")
+		u.withLockAndRender(func() string {
+			if u.debugEnabled {
+				u.cycleDebugTabLocked(1)
+				return "debug section: " + debugSectionName(u.debugTabIndex)
+			}
+			u.state.cycleNext()
+			slog.Info("termui cycle next", "stage", "ingress", "active", u.state.activeConversation())
+			return "switched conversation"
+		})
 		return nil
 	case tcell.KeyCtrlP, tcell.KeyBacktab:
-		u.mu.Lock()
-		defer u.mu.Unlock()
-		if u.debugEnabled {
-			u.cycleDebugTabLocked(-1)
-			u.renderLocked("debug section: " + debugSectionName(u.debugTabIndex))
-			return nil
-		}
-		u.state.cyclePrev()
-		slog.Info("termui cycle prev", "stage", "ingress", "active", u.state.activeConversation())
-		u.renderLocked("switched conversation")
+		u.withLockAndRender(func() string {
+			if u.debugEnabled {
+				u.cycleDebugTabLocked(-1)
+				return "debug section: " + debugSectionName(u.debugTabIndex)
+			}
+			u.state.cyclePrev()
+			slog.Info("termui cycle prev", "stage", "ingress", "active", u.state.activeConversation())
+			return "switched conversation"
+		})
 		return nil
 	default:
 		return event
@@ -311,13 +386,13 @@ func (u *UI) refreshDebug(parent context.Context) {
 	}
 
 	u.app.QueueUpdateDraw(func() {
-		u.mu.Lock()
-		defer u.mu.Unlock()
-		if !u.debugEnabled {
-			return
-		}
-		u.debugSnapshot = snapshot
-		u.renderLocked("debug updated")
+		u.withLockAndRender(func() string {
+			if !u.debugEnabled {
+				return u.statusText
+			}
+			u.debugSnapshot = snapshot
+			return "debug updated"
+		})
 	})
 }
 
@@ -349,7 +424,7 @@ func (u *UI) submitInputWithCallback(
 		return
 	}
 	if u.debugEnabled {
-		u.setStatus("debug mode active; press Ctrl+g to return to conversations")
+		u.withRenderLock("debug mode active; press Ctrl+g to return to conversations")
 		return
 	}
 
@@ -359,13 +434,13 @@ func (u *UI) submitInputWithCallback(
 		return
 	}
 
-	u.mu.Lock()
 	conversationID := u.state.activeConversation()
 	content := raw
-	u.state.appendUserMessage(conversationID, content)
-	u.input.SetText("")
-	u.renderLocked("sending")
-	u.mu.Unlock()
+	u.withLockAndRender(func() string {
+		u.state.appendUserMessage(conversationID, content)
+		u.input.SetText("")
+		return "sending"
+	})
 	slog.Info("termui submit", "stage", "ingress", "conversation_id", conversationID, "content_len", len(content))
 
 	go func() {
@@ -384,10 +459,28 @@ func (u *UI) submitInputWithCallback(
 
 func (u *UI) setStatus(message string) {
 	u.app.QueueUpdateDraw(func() {
-		u.mu.Lock()
-		defer u.mu.Unlock()
-		u.renderLocked(message)
+		u.withRenderLock(message)
 	})
+}
+
+func (u *UI) withRenderLock(status string) {
+	u.withLockAndRender(func() string { return status })
+}
+
+func (u *UI) withLockAndRender(fn func() string) {
+	u.mu.Lock()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("termui render panic recovered", "stage", "egress", "panic", r)
+		}
+		u.mu.Unlock()
+	}()
+
+	status := u.statusText
+	if fn != nil {
+		status = fn()
+	}
+	u.renderLocked(status)
 }
 
 func (u *UI) renderLocked(statusText string) {
@@ -402,6 +495,15 @@ func (u *UI) renderLocked(statusText string) {
 		u.renderDebugTableLocked()
 	} else {
 		u.conversationList.SetTitle(" Conversations ")
+		u.conversationList.SetBackgroundColor(u.bg)
+		u.conversationList.SetMainTextColor(u.text)
+		u.conversationList.SetSecondaryTextColor(u.mutedText)
+		u.conversationList.SetSelectedBackgroundColor(u.accent)
+		u.conversationList.SetSelectedTextColor(u.selected)
+		u.conversationList.SetMainTextStyle(tcell.StyleDefault.Foreground(u.text).Background(u.bg))
+		u.conversationList.SetSecondaryTextStyle(tcell.StyleDefault.Foreground(u.mutedText).Background(u.bg))
+		u.conversationList.SetSelectedStyle(tcell.StyleDefault.Foreground(u.selected).Background(u.accent))
+		u.conversationList.SetUseStyleTags(false, false)
 		u.conversationList.Clear()
 		for i, id := range u.state.conversations {
 			label := id
@@ -442,6 +544,15 @@ func (u *UI) renderLocked(statusText string) {
 
 func (u *UI) renderDebugSidebarLocked() {
 	u.conversationList.SetTitle(" Debug ")
+	u.conversationList.SetBackgroundColor(u.bg)
+	u.conversationList.SetMainTextColor(u.text)
+	u.conversationList.SetSecondaryTextColor(u.mutedText)
+	u.conversationList.SetSelectedBackgroundColor(u.accent)
+	u.conversationList.SetSelectedTextColor(u.selected)
+	u.conversationList.SetMainTextStyle(tcell.StyleDefault.Foreground(u.text).Background(u.bg))
+	u.conversationList.SetSecondaryTextStyle(tcell.StyleDefault.Foreground(u.mutedText).Background(u.bg))
+	u.conversationList.SetSelectedStyle(tcell.StyleDefault.Foreground(u.selected).Background(u.accent))
+	u.conversationList.SetUseStyleTags(false, false)
 	u.conversationList.Clear()
 	for i := 0; i < debugSectionCount; i++ {
 		u.conversationList.AddItem(debugSectionName(i), "", 0, nil)
@@ -451,16 +562,24 @@ func (u *UI) renderDebugSidebarLocked() {
 
 func (u *UI) renderDebugTableLocked() {
 	u.debugTable.Clear()
+	newCell := func(text string) *tview.TableCell {
+		return tview.NewTableCell(text).
+			SetTextColor(u.text).
+			SetBackgroundColor(u.bg)
+	}
+	newBoldCell := func(text string) *tview.TableCell {
+		return newCell(text).SetAttributes(tcell.AttrBold)
+	}
 	s := u.debugSnapshot
 	if s == nil {
-		u.debugTable.SetCell(0, 0, tview.NewTableCell("Loading debug snapshot..."))
+		u.debugTable.SetCell(0, 0, newCell("Loading debug snapshot..."))
 		return
 	}
 
 	row := 0
 	write := func(k, v string, valueColor tcell.Color) {
-		u.debugTable.SetCell(row, 0, tview.NewTableCell(k).SetAttributes(tcell.AttrBold))
-		cell := tview.NewTableCell(v)
+		u.debugTable.SetCell(row, 0, newBoldCell(k))
+		cell := newCell(v)
 		if valueColor != tcell.ColorDefault {
 			cell.SetTextColor(valueColor)
 		}
@@ -476,17 +595,17 @@ func (u *UI) renderDebugTableLocked() {
 		write("Runs", fmt.Sprintf("queued=%d running=%d", s.TaskRunsQueued, s.TaskRunsRunning), tcell.ColorDefault)
 		workerColor := tcell.ColorDefault
 		if len(s.Workers) == 0 {
-			workerColor = tcell.ColorYellow
+			workerColor = u.warn
 		}
 		write("Workers", defaultIfEmpty(strings.Join(s.Workers, ","), "none"), workerColor)
 		if len(s.Workers) == 1 && strings.TrimSpace(s.Workers[0]) == "worker-1" {
-			write("Warning", "only default worker-1 observed; set unique WORKER_ID per worker process", tcell.ColorYellow)
+			write("Warning", "only default worker-1 observed; set unique WORKER_ID per worker process", u.warn)
 		}
 		if len(u.state.conversations) > len(s.Workers) {
 			write(
 				"Warning",
 				fmt.Sprintf("conversations=%d exceed workers=%d", len(u.state.conversations), len(s.Workers)),
-				tcell.ColorYellow,
+				u.warn,
 			)
 		}
 		write("Schedulers", defaultIfEmpty(strings.Join(s.Schedulers, ","), "none"), tcell.ColorDefault)
@@ -499,34 +618,34 @@ func (u *UI) renderDebugTableLocked() {
 		workerColor := tcell.ColorDefault
 		workerValue := defaultIfEmpty(strings.Join(s.Workers, ","), "none")
 		if len(s.Workers) == 0 {
-			workerColor = tcell.ColorYellow
-			write("Warning", "no workers observed in recent window", tcell.ColorYellow)
+			workerColor = u.warn
+			write("Warning", "no workers observed in recent window", u.warn)
 		}
 		write("Workers", workerValue, workerColor)
 		if len(s.Workers) == 1 && strings.TrimSpace(s.Workers[0]) == "worker-1" {
-			write("Warning", "only default worker-1 observed; set unique WORKER_ID per worker process", tcell.ColorYellow)
+			write("Warning", "only default worker-1 observed; set unique WORKER_ID per worker process", u.warn)
 		}
 		if len(u.state.conversations) > len(s.Workers) {
 			write(
 				"Warning",
 				fmt.Sprintf("conversations=%d exceed workers=%d", len(u.state.conversations), len(s.Workers)),
-				tcell.ColorYellow,
+				u.warn,
 			)
 		}
 		write("Schedulers", defaultIfEmpty(strings.Join(s.Schedulers, ","), "none"), tcell.ColorDefault)
 	case debugTabRuns:
-		u.debugTable.SetCell(row, 0, tview.NewTableCell("Recent Task Runs").SetAttributes(tcell.AttrBold).SetExpansion(1))
+		u.debugTable.SetCell(row, 0, newBoldCell("Recent Task Runs").SetExpansion(1))
 		row++
-		u.debugTable.SetCell(row, 0, tview.NewTableCell("Task"))
-		u.debugTable.SetCell(row, 1, tview.NewTableCell("Conv"))
-		u.debugTable.SetCell(row, 2, tview.NewTableCell("Status"))
-		u.debugTable.SetCell(row, 3, tview.NewTableCell("Next"))
-		u.debugTable.SetCell(row, 4, tview.NewTableCell("Last"))
-		u.debugTable.SetCell(row, 5, tview.NewTableCell("Failures"))
+		u.debugTable.SetCell(row, 0, newBoldCell("Task"))
+		u.debugTable.SetCell(row, 1, newBoldCell("Conv"))
+		u.debugTable.SetCell(row, 2, newBoldCell("Status"))
+		u.debugTable.SetCell(row, 3, newBoldCell("Next"))
+		u.debugTable.SetCell(row, 4, newBoldCell("Last"))
+		u.debugTable.SetCell(row, 5, newBoldCell("Failures"))
 		row++
 
 		if len(s.RecentTasks) == 0 {
-			u.debugTable.SetCell(row, 0, tview.NewTableCell("none"))
+			u.debugTable.SetCell(row, 0, newCell("none"))
 			return
 		}
 		for i := 0; i < len(s.RecentTasks) && i < 8; i++ {
@@ -535,75 +654,84 @@ func (u *UI) renderDebugTableLocked() {
 			if t.LastRunStartedAt != nil {
 				last = last + "@" + t.LastRunStartedAt.Format("15:04:05")
 			}
-			u.debugTable.SetCell(row, 0, tview.NewTableCell(t.ID))
-			u.debugTable.SetCell(row, 1, tview.NewTableCell(t.ConversationID))
-			u.debugTable.SetCell(row, 2, tview.NewTableCell(t.Status))
-			u.debugTable.SetCell(row, 3, tview.NewTableCell(t.NextRunAt.Format("15:04:05")))
-			u.debugTable.SetCell(row, 4, tview.NewTableCell(defaultIfEmpty(last, "-")))
-			u.debugTable.SetCell(row, 5, tview.NewTableCell(strconv.Itoa(t.FailureCount)))
+			u.debugTable.SetCell(row, 0, newCell(t.ID))
+			u.debugTable.SetCell(row, 1, newCell(t.ConversationID))
+			u.debugTable.SetCell(row, 2, newCell(t.Status))
+			u.debugTable.SetCell(row, 3, newCell(t.NextRunAt.Format("15:04:05")))
+			u.debugTable.SetCell(row, 4, newCell(defaultIfEmpty(last, "-")))
+			u.debugTable.SetCell(row, 5, newCell(strconv.Itoa(t.FailureCount)))
 			row++
 		}
 	}
 }
 
 func (u *UI) handleCommand(ctx context.Context, cmd parsedCommand, onCommand func(context.Context, CommandAction) (string, error)) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
 	switch cmd.kind {
 	case commandHelp:
-		u.input.SetText("")
-		u.renderLocked("commands: /new [conversation], /switch <conversation>, /rename <conversation>, /remove [conversation], /tasks <ls|ls-all|ls-conversation|rm|rm-all>, /help, /quit, /exit")
+		u.withLockAndRender(func() string {
+			u.input.SetText("")
+			return "commands: /new [conversation], /switch <conversation>, /rename <conversation>, /remove [conversation], /tasks <ls|ls-all|ls-conversation|rm|rm-all>, /help, /quit, /exit"
+		})
 	case commandQuit:
-		u.input.SetText("")
-		u.renderLocked("exiting...")
+		u.withLockAndRender(func() string {
+			u.input.SetText("")
+			return "exiting..."
+		})
 		go u.app.Stop()
 	case commandNew:
 		conversationID := strings.TrimSpace(cmd.arg)
 		if conversationID == "" {
 			conversationID = u.state.nextDefaultConversationID()
 		}
-		idx, created := u.state.ensureConversationWithCreated(conversationID)
-		u.state.switchToIndex(idx)
-		u.input.SetText("")
-		if created {
-			u.renderLocked("created conversation " + conversationID)
-		} else {
-			u.renderLocked("conversation " + conversationID + " already exists")
-		}
+		u.withLockAndRender(func() string {
+			idx, created := u.state.ensureConversationWithCreated(conversationID)
+			u.state.switchToIndex(idx)
+			u.input.SetText("")
+			if created {
+				return "created conversation " + conversationID
+			}
+			return "conversation " + conversationID + " already exists"
+		})
 	case commandSwitch:
-		if !u.state.hasConversation(cmd.arg) {
-			u.renderLocked("conversation " + cmd.arg + " not found (create with /new)")
-			return
-		}
-		idx := u.state.ensureConversation(cmd.arg)
-		u.state.switchToIndex(idx)
-		u.input.SetText("")
-		u.renderLocked("switched to conversation " + cmd.arg)
+		u.withLockAndRender(func() string {
+			if !u.state.hasConversation(cmd.arg) {
+				return "conversation " + cmd.arg + " not found (create with /new)"
+			}
+			idx := u.state.ensureConversation(cmd.arg)
+			u.state.switchToIndex(idx)
+			u.input.SetText("")
+			return "switched to conversation " + cmd.arg
+		})
 	case commandRename:
-		oldID, err := u.state.renameActiveConversation(cmd.arg)
-		u.input.SetText("")
-		if err != nil {
-			u.renderLocked("rename failed: " + err.Error())
-			return
-		}
-		if oldID == cmd.arg {
-			u.renderLocked("conversation already named " + cmd.arg)
-			return
-		}
-		u.renderLocked("renamed " + oldID + " to " + cmd.arg)
+		u.withLockAndRender(func() string {
+			oldID, err := u.state.renameActiveConversation(cmd.arg)
+			u.input.SetText("")
+			if err != nil {
+				return "rename failed: " + err.Error()
+			}
+			if oldID == cmd.arg {
+				return "conversation already named " + cmd.arg
+			}
+			return "renamed " + oldID + " to " + cmd.arg
+		})
 	case commandRemove:
 		target := strings.TrimSpace(cmd.arg)
-		if target == "" {
-			target = u.state.activeConversation()
-		}
-		if !u.state.hasConversation(target) {
+		found := false
+		u.withLockAndRender(func() string {
+			if target == "" {
+				target = u.state.activeConversation()
+			}
+			if !u.state.hasConversation(target) {
+				u.input.SetText("")
+				return "conversation " + target + " not found"
+			}
+			found = true
 			u.input.SetText("")
-			u.renderLocked("conversation " + target + " not found")
+			return "removing conversation " + target + "..."
+		})
+		if !found {
 			return
 		}
-		u.input.SetText("")
-		u.renderLocked("removing conversation " + target + "...")
 		go func(conversationID string) {
 			if onCommand == nil {
 				u.setStatus("remove failed: backend command handler unavailable")
@@ -618,28 +746,29 @@ func (u *UI) handleCommand(ctx context.Context, cmd parsedCommand, onCommand fun
 				return
 			}
 			u.app.QueueUpdateDraw(func() {
-				u.mu.Lock()
-				defer u.mu.Unlock()
-				removed, active := u.state.removeConversation(conversationID)
-				if !removed {
-					u.renderLocked("conversation " + conversationID + " not found")
-					return
-				}
-				status := "removed conversation " + conversationID + "; active=" + active
-				if strings.TrimSpace(result) != "" {
-					status = result
-				}
-				u.renderLocked(status)
+				u.withLockAndRender(func() string {
+					removed, active := u.state.removeConversation(conversationID)
+					if !removed {
+						return "conversation " + conversationID + " not found"
+					}
+					status := "removed conversation " + conversationID + "; active=" + active
+					if strings.TrimSpace(result) != "" {
+						status = result
+					}
+					return status
+				})
 			})
 		}(target)
 	case commandTasks:
-		u.input.SetText("")
 		action, usageErr := parseTasksAction(strings.TrimSpace(cmd.arg))
 		if usageErr != "" {
-			u.renderLocked(usageErr)
+			u.withRenderLock(usageErr)
 			return
 		}
-		u.renderLocked("running /tasks ...")
+		u.withLockAndRender(func() string {
+			u.input.SetText("")
+			return "running /tasks ..."
+		})
 		go func(a CommandAction) {
 			if onCommand == nil {
 				u.setStatus("tasks failed: backend command handler unavailable")
@@ -651,16 +780,16 @@ func (u *UI) handleCommand(ctx context.Context, cmd parsedCommand, onCommand fun
 				return
 			}
 			u.app.QueueUpdateDraw(func() {
-				u.mu.Lock()
-				defer u.mu.Unlock()
-				if strings.TrimSpace(result) != "" {
-					u.state.appendAssistantMessage(u.state.activeConversation(), result)
-				}
-				u.renderLocked("tasks command complete")
+				u.withLockAndRender(func() string {
+					if strings.TrimSpace(result) != "" {
+						u.state.appendAssistantMessage(u.state.activeConversation(), result)
+					}
+					return "tasks command complete"
+				})
 			})
 		}(action)
 	default:
-		u.renderLocked("invalid command (try /help)")
+		u.withRenderLock("invalid command (try /help)")
 	}
 }
 
@@ -735,11 +864,12 @@ func (u *UI) triggerFlashLocked(index int) {
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		u.app.QueueUpdateDraw(func() {
-			u.mu.Lock()
-			defer u.mu.Unlock()
-			if u.flashIndex == index && u.flashUntil.Equal(expire) && time.Now().After(u.flashUntil) {
-				u.renderLocked(u.statusText)
-			}
+			u.withLockAndRender(func() string {
+				if u.flashIndex == index && u.flashUntil.Equal(expire) && time.Now().After(u.flashUntil) {
+					return u.statusText
+				}
+				return u.statusText
+			})
 		})
 	}()
 }

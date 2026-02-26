@@ -38,6 +38,7 @@ type Config struct {
 	ToolDescriptions       map[string]string
 	UIUserLabel            string
 	UIAssistantLabel       string
+	TermTheme              string
 }
 
 type policyTool struct {
@@ -65,7 +66,7 @@ func Load() (Config, error) {
 		MaxActiveConversations: envIntOrDefault("MAX_ACTIVE_CONVERSATIONS", 3),
 		HistoryWindow:          envIntOrDefault("HISTORY_WINDOW", 20),
 		RequestTimeout:         time.Duration(envIntOrDefault("REQUEST_TIMEOUT_SECONDS", 30)) * time.Second,
-		LogLevel:               parseLogLevel(envOrDefault("LOG_LEVEL", "INFO")),
+		LogLevel:               parseLogLevel(envOrDefault("LOG_LEVEL", "WARN")),
 		LogPath:                envOrDefault("LOG_PATH", "./data/goclaw.log"),
 		Mode:                   envOrDefault("MODE", "single"),
 		WorkerID:               envOrDefault("WORKER_ID", ""),
@@ -81,6 +82,7 @@ func Load() (Config, error) {
 		PolicyPath:             envOrDefault("POLICY_PATH", "./data/goclaw.toml"),
 		UIUserLabel:            envOrDefault("UI_USER_LABEL", "you"),
 		UIAssistantLabel:       envOrDefault("UI_ASSISTANT_LABEL", "goclaw"),
+		TermTheme:              strings.ToLower(envOrDefault("TERM_THEME", "light")),
 	}
 
 	policyCfg, err := loadPolicyFile(cfg.PolicyPath)
@@ -119,6 +121,14 @@ func Load() (Config, error) {
 	}
 	if strings.TrimSpace(cfg.UIAssistantLabel) == "" {
 		return Config{}, trace.BadParameter("UI assistant label must be non-empty")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.TermTheme)) {
+	case "", "light", "dark":
+		if strings.TrimSpace(cfg.TermTheme) == "" {
+			cfg.TermTheme = "light"
+		}
+	default:
+		return Config{}, trace.BadParameter("TERM_THEME must be one of: light,dark")
 	}
 
 	return cfg, nil
